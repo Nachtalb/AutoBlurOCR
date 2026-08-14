@@ -1,6 +1,6 @@
 [package]
 name = "redakt"
-version = "0.8.1"
+version = "0.8.2"
 edition = "2021"
 description = "Offline OCR-driven text redaction for video"
 rust-version = "1.77"

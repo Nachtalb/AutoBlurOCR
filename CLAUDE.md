@@ -138,10 +138,14 @@ splitting the track at exactly the dropouts being looked for, so the report goes
 when it matters. Measured over 200 randomised scrolls: per-reading caught 87% of leaking frames
 with false alarms, clustering at the bridge caught 40% with none, clustering at `LOST` catches
 87% with none. Anything from 0.5 s to 5 s measured identically, so the figure is not
-load-bearing; having a bound at all is. The warning appears next to the generate button
-(the only place simple mode can show it), in the review panel, and it forces the pre-export
-dialog even in simple mode. The bridge itself defaults to 0 and is an advanced setting, so the
-simple-mode wording says where to find it rather than naming a control that is not on screen.
+load-bearing; having a bound at all is.
+
+The report lives in the review panel and its tab title, and nowhere else. It was also a red line
+under the generate button and a bullet in the pre-export dialog; both came off because the dialog
+had become a briefing — every almost-match, guessed stretch and uncovered dropout — which read as
+an alarm on renders that were in fact perfect and so got dismissed unread. A gate nobody reads is
+not a gate. What remains asks one question, and the counts sit where there are buttons to go and
+look at them.
 
 `exposedGaps` accounts for the leaks where the box is off. A residual ~12% of leaking frames in
 that harness are a different failure: the box is on but its held rect is stale by one sample of

@@ -1357,9 +1357,6 @@ en: {
   'bl.busy':'there is already a bleep at the playhead',
   'bl.del':'remove', 'bl.none':'no audio track in this video — nothing to bleep',
   'bl.n':(n,secs) => `${n} bleep(s), ${secs}s of audio replaced by a tone`,
-  'worry.bleeps':(n,secs) => `${n} bleep(s) covering ${secs}s — everything else in the audio is `
-                           + `kept as it is`,
-  'worry.audio':'the sound is copied through untouched — nothing spoken is redacted',
   'p.showout.title':'Show the last rendered video in Explorer, with its redaction log beside it.',
   'b.title':'boxes', 'b.clear':'clear', 'b.clear.title':'remove every box',
   'b.empty':'none yet — pick text on the left, or drag on the video',
@@ -1413,17 +1410,9 @@ en: {
   'miss.title':(d,q) => `${d} character(s) different from "${q}"`,
   'ask.delall':n => `Remove all ${n} boxes?`,
   'ask.reset':'Reset the project?\n\nBoxes and the OCR result are discarded. The video stays open.',
-  'ask.export':(hits,qs,worries) =>
+  'ask.export':(hits,qs) =>
     'Generated redactions are proposals, not results.\n\n'
-    + `${hits} hits across ${qs} string(s).\n\n`
-    + (worries.length ? 'Still worth a look:\n· ' + worries.join('\n· ')
-                      : 'Nothing almost-matched and no guessed stretches.')
-    + '\n\nRender it?',
-  'worry.miss':n => `${n} almost-matched, left visible — the most likely place for a leak`,
-  'worry.gaps':n => `${n} stretch(es) where OCR lost the text and the box was guessed`,
-  'worry.exposed':(n,adv) => `${n} dropout(s) LEFT UNCOVERED — longer than the bridge, so the `
-    + `text is visible there. Raise "bridge dropouts up to" and generate again`
-    + (adv ? '.' : ' — it is under the advanced settings.'),
+    + `${hits} hits across ${qs} string(s).\n\nRender it?`,
   'exp.start':'starting ffmpeg…', 'exp.stopping':'stopping…',
   'exp.progress':(p,extra) => `rendering… ${p}%` + (extra ? ` · ${extra}` : ''),
   'exp.wrote':(name,sha) => `<span class="good">wrote ${name}</span> · log written · sha256 `
@@ -1503,8 +1492,6 @@ de: {
   'bl.busy':'an der Abspielposition liegt bereits ein Piepser',
   'bl.del':'entfernen', 'bl.none':'kein Ton in diesem Video — nichts zu piepsen',
   'bl.n':(n,secs) => `${n} Piepser, ${secs}s Ton ersetzt`,
-  'worry.bleeps':(n,secs) => `${n} Piepser über ${secs}s — der übrige Ton bleibt unverändert`,
-  'worry.audio':'der Ton wird unverändert übernommen — Gesprochenes wird nicht geschwärzt',
   'p.showout.title':'Zeigt das zuletzt gerenderte Video im Explorer, mit dem Protokoll daneben.',
   'b.title':'Balken', 'b.clear':'leeren', 'b.clear.title':'alle Balken entfernen',
   'b.empty':'noch keine — links Text auswählen oder im Video ziehen',
@@ -1560,18 +1547,9 @@ de: {
   'ask.delall':n => `Alle ${n} Balken entfernen?`,
   'ask.reset':'Projekt zurücksetzen?\n\nBalken und Texterkennung werden verworfen. Das Video '
              +'bleibt offen.',
-  'ask.export':(hits,qs,worries) =>
+  'ask.export':(hits,qs) =>
     'Erzeugte Schwärzungen sind Vorschläge, keine Ergebnisse.\n\n'
-    + `${hits} Funde über ${qs} Text(e).\n\n`
-    + (worries.length ? 'Noch einen Blick wert:\n· ' + worries.join('\n· ')
-                      : 'Nichts fast getroffen, keine geratenen Abschnitte.')
-    + '\n\nRendern?',
-  'worry.miss':n => `${n} fast getroffen und sichtbar geblieben — die wahrscheinlichste Leckstelle`,
-  'worry.gaps':n => `${n} Abschnitt(e), in denen der Text verloren ging und der Balken geraten `
-                  + `wurde`,
-  'worry.exposed':(n,adv) => `${n} Aussetzer NICHT ABGEDECKT — länger als die Überbrückung, der `
-    + `Text ist dort sichtbar. „Aussetzer überbrücken bis“ erhöhen und neu erzeugen`
-    + (adv ? '.' : ' — steht unter den erweiterten Einstellungen.'),
+    + `${hits} Funde über ${qs} Text(e).\n\nRendern?`,
   'exp.start':'ffmpeg startet…', 'exp.stopping':'wird gestoppt…',
   'exp.progress':(p,extra) => `rendert… ${p}%` + (extra ? ` · ${extra}` : ''),
   'exp.wrote':(name,sha) => `<span class="good">${name} geschrieben</span> · Protokoll geschrieben `
@@ -2275,12 +2253,8 @@ function rebuild() {
   gen.exposed = exposed.sort((a,b) => b.len - a.len);
   boxes.push(...tracks);
   sel = tracks[0] || null;
-  /* Simple mode hides the review panel, so this line is the only place the warning can land
-     before the export dialog. It goes next to the button that produced it either way. */
   $('genstat').innerHTML = tx('gen.stat', live.length, tracks.length, gen.queries.length,
-                              gen.dropped.size)
-    + (exposed.length
-       ? `<br><span class="err">${tx('worry.exposed', exposed.length, !simple())}</span>` : '');
+                              gen.dropped.size);
   render(); drawCheck();
 }
 $('gapSec').onchange = $('padPx').onchange = $('interp').onchange =
@@ -2413,23 +2387,13 @@ $('peeka').onclick = () => { const s = curSpan(); if (s) peekAt(s.e + 1/(+$('fps
 $('export').onclick = async () => {
   if (!videoPath) return say(tx('err.novideo'), 'err');
   if (!boxes.length && !bleeps.length) return say(tx('err.noboxes'), 'err');
-  /* Simple mode has no review panels to send anyone to, so the gate would be a dialog listing
-     things the user cannot then go and look at. Advanced keeps it — and so does simple the moment
-     a dropout was left uncovered, because that one is not a thing to review, it is text about to
-     be published. */
-  if (gen && (!simple() || (gen.exposed && gen.exposed.length))) {
-    const gaps = gen.tracks.reduce((n,trk) => n + trk.gen.gaps.length, 0);
-    const nmiss = groupMisses(gen.misses).length;
-    const worries = [];
-    if (gen.exposed && gen.exposed.length)
-      worries.push(tx('worry.exposed', gen.exposed.length, !simple()));
-    const bsecs = mergeSpans(bleeps).reduce((n,b) => n + (b.e - b.s), 0);
-    worries.push(bleeps.length ? tx('worry.bleeps', bleeps.length, bsecs.toFixed(2))
-                               : tx('worry.audio'));
-    if (nmiss) worries.push(tx('worry.miss', nmiss));
-    if (gaps) worries.push(tx('worry.gaps', gaps));
-    if (!await ask(tx('ask.export', gen.hits.length, gen.queries.length, worries))) return;
-  }
+  /* A confirmation, not a briefing. It used to list every almost-match, guessed stretch and
+     uncovered dropout, which read as an alarm on renders that were in fact perfect, so it got
+     dismissed unread — and a gate nobody reads is not a gate. The counts and the uncovered
+     stretches are in the review panel, where there are buttons to go and look at them.
+     Simple mode has no review panel to send anyone to, so it does not ask at all. */
+  if (gen && !simple()
+      && !await ask(tx('ask.export', gen.hits.length, gen.queries.length))) return;
   const out = await invoke('pick_save',
     { name: (vid.dataset.name||'out').replace(/\.\w+$/,'') + '.redacted.mp4' });
   if (!out) return;

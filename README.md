@@ -47,15 +47,14 @@ lists the packs you actually have installed, so a missing one is obvious before 
    stretch; the audio there is replaced by a 1 kHz tone. A tone rather than silence, so anyone
    watching can tell an edit was made rather than wondering whether the recording simply went
    quiet. Everything you do not mark is copied through exactly as it was.
-6. **Check it** (advanced mode). Three tabs, and this step matters:
+6. **Check it** (advanced mode). Three tabs, and this step is where a leak is caught:
    - **every hit** — step through each place the text was found and confirm the box sits over it.
      Jump to the frame either side of a redaction with the boxes switched off to see whether
      anything is readable there.
    - **guessed stretches** — where OCR lost the text for a moment and the box was held across the
      gap. Worth watching. Any dropout too long to bridge is listed here first, in red: the box is
      off for those frames and the text is visible. Raise **bridge dropouts up to** until they
-     stop appearing — it is an advanced setting, and it starts at 0. This one is flagged
-     everywhere, including in simple mode.
+     stop appearing — it is an advanced setting, and it starts at 0.
    - **almost matched** — text that *nearly* matched what you picked and was left visible. This is
      where a leak hides. One row per distinct reading, however many frames it spans. Read it.
 7. **Render.** You get the redacted video, a log beside it, and buttons to open the folder, play
