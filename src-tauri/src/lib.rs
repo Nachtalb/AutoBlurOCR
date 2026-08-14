@@ -137,6 +137,8 @@ pub struct VideoInfo {
     pub duration: f64,
     pub fps: f64,
     pub sha256: String,
+    /// Bleeps need somewhere to go, and a graph referencing `[0:a]` on a silent file just fails.
+    pub has_audio: bool,
 }
 
 /// Input is opened read-only and never written to (§10).
@@ -196,7 +198,11 @@ pub fn probe(path: &Path) -> Result<VideoInfo> {
     let fps = ratio(vs["avg_frame_rate"].as_str().unwrap_or("0/0"));
     let fps = if fps > 0.0 { fps } else { ratio(vs["r_frame_rate"].as_str().unwrap_or("25/1")) };
 
-    Ok(VideoInfo { path: p, width, height, duration, fps, sha256: sha256_file(path)? })
+    let has_audio = j["streams"]
+        .as_array()
+        .is_some_and(|a| a.iter().any(|s| s["codec_type"] == "audio"));
+
+    Ok(VideoInfo { path: p, width, height, duration, fps, sha256: sha256_file(path)?, has_audio })
 }
 
 /* -------------------------------------------------------- frame sampling */
@@ -357,6 +363,10 @@ pub struct ExportReport {
     pub ffmpeg: String,
     pub command: Vec<String>,
     pub filtergraph: String,
+    /// The audio graph, so the log says which stretches were bleeped and with what.
+    pub audio_filter: String,
+    /// Whether source metadata, chapters, subtitle and data streams were dropped.
+    pub stripped: bool,
     pub duration: f64,
     pub derivative: String,
 }
@@ -366,7 +376,23 @@ pub struct ExportReport {
 /// spelling, removed in ffmpeg 8. Which one works depends on the bundled build, so the first
 /// export tries the new one and falls back — an unrecognised option fails instantly, before any
 /// encoding, so the retry costs nothing. The answer is remembered for the process.
+/// What one export does. The graphs are built by the frontend, which owns the box model; this
+/// carries them plus the two decisions that are about the file rather than its pixels.
+#[derive(Default, Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct Plan {
+    /// `drawbox` chain for the video.
+    pub filtergraph: String,
+    /// `filter_complex` replacing the bleeped stretches with a tone. Empty for none.
+    pub audio: String,
+    /// Drop everything that is not the picture and the sound: source metadata, chapters,
+    /// subtitle and data streams, extra tracks. A subtitle carrying the very text that was
+    /// just painted over is a redaction with a hole in it.
+    pub strip: bool,
+}
+
 const FILTER_FILE_FLAGS: [&str; 2] = ["-/filter:v", "-filter_script:v"];
+const COMPLEX_FILE_FLAGS: [&str; 2] = ["-/filter_complex", "-filter_complex_script"];
 static FILTER_FLAG: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Runs ffmpeg, pumping `time=` out of its stderr. `Ok((success, stderr_tail))`.
@@ -422,49 +448,85 @@ fn run_encode(
 /// quoting mangles them.
 pub fn export(
     path: &Path,
-    filtergraph: &str,
+    plan: &Plan,
     out: &Path,
     progress: &dyn Fn(f64),
     log: &dyn Fn(&str),
     cancel: &AtomicBool,
 ) -> Result<ExportReport> {
     let info = probe(path)?;
-    if filtergraph.trim().is_empty() {
-        bail!("empty filtergraph — nothing to redact");
+    if plan.filtergraph.trim().is_empty() && plan.audio.trim().is_empty() {
+        bail!("nothing to redact: no boxes and no bleeps");
     }
     if path == out {
         bail!("refusing to overwrite the input: the input is evidence and is opened read-only");
+    }
+    let bleeping = !plan.audio.trim().is_empty();
+    if bleeping && !info.has_audio {
+        bail!("there are bleeps but {} has no audio track", path.display());
     }
 
     // PID alone is not unique enough: two exports in one process would share the file, and one
     // would delete it while the other's ffmpeg is still reading it.
     static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let script = std::env::temp_dir().join(format!(
-        "redakt-boxes-{}-{}.txt",
-        std::process::id(),
-        SEQ.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::write(&script, filtergraph)?;
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let stem = |what: &str| {
+        std::env::temp_dir().join(format!("redakt-{what}-{}-{seq}.txt", std::process::id()))
+    };
+    let script = stem("boxes");
+    let ascript = stem("bleeps");
+    // A graph goes to ffmpeg from a file, never inline — the same escaped commas that made the
+    // video one unquotable are in this one too.
+    std::fs::write(&script, &plan.filtergraph)?;
+    if bleeping {
+        std::fs::write(&ascript, &plan.audio)?;
+    }
+    let clean = || {
+        let _ = std::fs::remove_file(&script);
+        let _ = std::fs::remove_file(&ascript);
+    };
 
-    let (pi, ps, po) = (
+    let (pi, ps, pa, po) = (
         path.to_string_lossy().to_string(),
         script.to_string_lossy().to_string(),
+        ascript.to_string_lossy().to_string(),
         out.to_string_lossy().to_string(),
     );
     let ffmpeg = tool("ffmpeg");
     let mut flag = FILTER_FLAG.load(Ordering::Relaxed);
     let args = loop {
-        let args = vec![
-            "-hide_banner", "-nostdin", "-y", "-i", &pi, FILTER_FILE_FLAGS[flag], &ps,
-            "-c:v", "libx264", "-crf", "18", "-preset", "veryfast", "-c:a", "copy", &po,
-        ];
+        let mut args = vec!["-hide_banner", "-nostdin", "-y", "-i", &pi];
+        // The tone is a second input, silenced everywhere except the bleeped stretches and
+        // summed with the original — which is silenced over exactly those stretches.
+        if bleeping {
+            args.extend(["-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=48000"]);
+        }
+        if !plan.filtergraph.trim().is_empty() {
+            args.extend([FILTER_FILE_FLAGS[flag], &ps]);
+        }
+        if bleeping {
+            args.extend([COMPLEX_FILE_FLAGS[flag], &pa, "-map", "0:v:0", "-map", "[aout]"]);
+        } else if plan.strip {
+            // `?` so a video with no sound is not an error
+            args.extend(["-map", "0:v:0", "-map", "0:a:0?"]);
+        }
+        if plan.strip {
+            args.extend(["-map_metadata", "-1", "-map_chapters", "-1", "-sn", "-dn"]);
+        }
+        args.extend(["-c:v", "libx264", "-crf", "18", "-preset", "veryfast"]);
+        if bleeping {
+            args.extend(["-c:a", "aac", "-b:a", "192k"]);
+        } else {
+            args.extend(["-c:a", "copy"]);
+        }
+        args.push(&po);
         let (ok, tail) = run_encode(&ffmpeg, &args, info.duration, progress, log, cancel)?;
         if ok {
             FILTER_FLAG.store(flag, Ordering::Relaxed);
             break args;
         }
         if cancel.load(Ordering::Relaxed) {
-            let _ = std::fs::remove_file(&script);
+            clean();
             let _ = std::fs::remove_file(out);
             bail!("cancelled");
         }
@@ -472,10 +534,10 @@ pub fn export(
             flag += 1;
             continue;
         }
-        let _ = std::fs::remove_file(&script);
+        clean();
         bail!("ffmpeg export failed:\n{}", readable_error(&tail));
     };
-    let _ = std::fs::remove_file(&script);
+    clean();
     progress(1.0);
 
     let command: Vec<String> = std::iter::once(ffmpeg.to_string_lossy().to_string())
@@ -490,7 +552,9 @@ pub fn export(
         tool_version: env!("CARGO_PKG_VERSION").to_string(),
         ffmpeg: tool_version("ffmpeg"),
         command,
-        filtergraph: filtergraph.to_string(),
+        filtergraph: plan.filtergraph.clone(),
+        audio_filter: plan.audio.clone(),
+        stripped: plan.strip,
         duration: info.duration,
         derivative: "Output is a derivative exhibit: re-encoded with libx264 -crf 18, \
                      not a bit-exact copy of the input."

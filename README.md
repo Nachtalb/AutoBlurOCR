@@ -43,7 +43,11 @@ lists the packs you actually have installed, so a missing one is obvious before 
    and watch the list narrow as you type.
 4. **Hide it.** Boxes are generated for every appearance and follow the text as it moves. They
    are filled bars — black by default, white or red if that reads better against the footage.
-5. **Check it** (advanced mode). Three tabs, and this step matters:
+5. **Bleep the sound, if it needs it.** Drag on the bleep track under the video to mark a
+   stretch; the audio there is replaced by a 1 kHz tone. A tone rather than silence, so anyone
+   watching can tell an edit was made rather than wondering whether the recording simply went
+   quiet. Everything you do not mark is copied through exactly as it was.
+6. **Check it** (advanced mode). Three tabs, and this step matters:
    - **every hit** — step through each place the text was found and confirm the box sits over it.
      Jump to the frame either side of a redaction with the boxes switched off to see whether
      anything is readable there.
@@ -54,13 +58,18 @@ lists the packs you actually have installed, so a missing one is obvious before 
      everywhere, including in simple mode.
    - **almost matched** — text that *nearly* matched what you picked and was left visible. This is
      where a leak hides. One row per distinct reading, however many frames it spans. Read it.
-6. **Render.** You get the redacted video, a log beside it, and buttons to open the folder, play
+7. **Render.** You get the redacted video, a log beside it, and buttons to open the folder, play
    the file, or re-read it and confirm the text is gone. The folder stays one click away in the
    project panel afterwards. **ffmpeg output** shows what the encoder
    is doing while it works, including its speed, and **stop** ends a render you don't want to wait
    for.
 
 Every generated box stays editable, and you can always drag a box on the video by hand.
+
+**Strip metadata and extra tracks** is on by default, under the advanced settings. It drops the
+source file's metadata — title, comments, device, location — its chapters, and every subtitle and
+data stream. A subtitle track can spell out the very text the bars cover, which would make the
+redaction pointless; leave this on unless you have a reason not to.
 
 ## What it writes
 
@@ -70,7 +79,10 @@ filtergraph and command line, every redacted string, and per-box counts. Pressin
 is gone** — on the dialog that appears when a render finishes — folds its verdict into the same
 file.
 
-The output is a re-encoded derivative, not a bit-exact copy, and the log says so.
+The output is a re-encoded derivative, not a bit-exact copy, and the log says so. The bars are
+burned in: ffmpeg decodes each frame, fills the box with solid colour, and re-encodes from that.
+There is no overlay to peel off and nothing underneath to recover — which is exactly why blur and
+pixelate were removed, since both are reversible transforms of the pixels rather than a discard.
 
 ## Handling
 

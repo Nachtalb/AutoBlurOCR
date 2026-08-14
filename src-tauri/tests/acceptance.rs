@@ -24,6 +24,11 @@ const T_ON: f64 = 4.0;
 const T_OFF: f64 = 6.0;
 const RATE: f64 = 2.0;
 
+/// The common case: boxes only, nothing stripped.
+fn plan(graph: &str) -> Plan {
+    Plan { filtergraph: graph.to_string(), ..Default::default() }
+}
+
 fn tmp() -> PathBuf {
     let d = Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("fixtures");
     std::fs::create_dir_all(&d).unwrap();
@@ -78,6 +83,77 @@ fn fixture() -> PathBuf {
               "-vf", &vf, "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p",
               "-f", "mp4", &part.to_string_lossy()]);
     })
+}
+
+/// A clip that carries everything a redaction must not leak through: a 440 Hz tone to bleep
+/// over, a subtitle track spelling out the very text the boxes cover, and identifying metadata.
+fn fixture_leaky() -> PathBuf {
+    let srt = build_once(tmp().join("leak.srt"), |part| {
+        std::fs::write(part, format!("1\n00:00:01,000 --> 00:00:04,000\n{TEXT}\n\n")).unwrap();
+    });
+    build_once(tmp().join("fixture-leaky.mp4"), |part| {
+        run(&["-y", "-f", "lavfi", "-i", "color=c=white:s=320x240:d=6:r=25",
+              "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+              "-i", &srt.to_string_lossy(),
+              "-map", "0:v", "-map", "1:a", "-map", "2:s", "-t", "6",
+              "-c:v", "libx264", "-crf", "20", "-pix_fmt", "yuv420p",
+              "-c:a", "aac", "-c:s", "mov_text",
+              "-metadata", "title=secret camera", "-metadata", "comment=case 4711",
+              "-f", "mp4", &part.to_string_lossy()]);
+    })
+}
+
+/// Mean volume of one window after keeping only what is near `hz`. A tone at that frequency
+/// comes through loud; anything else is left far quieter.
+fn tone_db(file: &Path, from: f64, to: f64, hz: u32) -> f64 {
+    let af = format!("atrim=start={from}:end={to},bandpass=f={hz}:width_type=h:w=60,volumedetect");
+    let o = Command::new(tool("ffmpeg"))
+        .args(["-v", "info", "-nostdin", "-i", &file.to_string_lossy(), "-af", &af,
+               "-f", "null", "-"])
+        .output().unwrap();
+    let err = String::from_utf8_lossy(&o.stderr).to_string();
+    err.split("mean_volume:").nth(1)
+        .and_then(|t| t.split_whitespace().next())
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or_else(|| panic!("no mean_volume in ffmpeg output:\n{err}"))
+}
+
+/// The three ways a "redacted" file leaks anyway: the sound, a subtitle track repeating the
+/// text, and metadata naming the source. Bleeps and strip exist for exactly these.
+#[test]
+fn bleeps_replace_the_audio_and_strip_removes_the_other_tracks() {
+    let inp = fixture_leaky();
+    let out = tmp().join("leaky-out.mp4");
+    let _ = std::fs::remove_file(&out);
+    let plan = Plan {
+        filtergraph: "drawbox=x=10:y=10:w=100:h=30:color=black@1:t=fill:enable=between(t\\,1\\,4)"
+            .into(),
+        audio: "[0:a]volume=0:enable='between(t,2,4)'[voice];\
+                [1:a]volume=0:enable='not(between(t,2,4))'[beep];\
+                [voice][beep]amix=inputs=2:normalize=0:duration=first[aout]".into(),
+        strip: true,
+    };
+    export(&inp, &plan, &out, &|_| {}, &|_| {}, &NO_CANCEL).unwrap();
+
+    // the bleeped window is the 1 kHz tone, the rest is the original 440 Hz
+    let inside = tone_db(&out, 2.5, 3.5, 1000);
+    let outside = tone_db(&out, 4.5, 5.5, 1000);
+    assert!(inside > outside + 20.0,
+            "1 kHz should dominate inside the bleep and be absent outside: {inside} vs {outside}");
+    let voice_gone = tone_db(&out, 2.5, 3.5, 440);
+    let voice_there = tone_db(&out, 4.5, 5.5, 440);
+    assert!(voice_there > voice_gone + 20.0,
+            "the original audio must be gone inside the bleep: {voice_gone} vs {voice_there}");
+
+    // and nothing else came along
+    let probe = Command::new(tool("ffprobe"))
+        .args(["-v", "error", "-show_entries", "stream=codec_type", "-show_entries", "format_tags",
+               "-of", "default=nw=1", &out.to_string_lossy()])
+        .output().unwrap();
+    let t = String::from_utf8_lossy(&probe.stdout).to_string();
+    assert!(!t.contains("subtitle"), "the subtitle track spelled out the redacted text:\n{t}");
+    assert!(!t.contains("secret camera") && !t.contains("case 4711"),
+            "source metadata survived the strip:\n{t}");
 }
 
 /// Same string in two places in the same frame (§11.5 ground truth, and a second OCR target).
@@ -225,7 +301,8 @@ fn export_applies_the_graph_and_logs_hashes() {
     // drawbox over the text, enabled exactly over the padded span
     let graph = "drawbox=x=410:y=290:w=520:h=80:color=red@1:t=fill:enable=between(t\\,3.5\\,6.5)";
     let seen = std::cell::RefCell::new(Vec::<f64>::new());
-    let rep = export(&inp, graph, &out, &|f| seen.borrow_mut().push(f), &|_| {}, &NO_CANCEL).unwrap();
+    let rep = export(&inp, &plan(graph), &out, &|f| seen.borrow_mut().push(f), &|_| {}, &NO_CANCEL)
+        .unwrap();
     let seen = seen.into_inner();
 
     assert!(out.is_file());
@@ -250,9 +327,11 @@ fn export_applies_the_graph_and_logs_hashes() {
 #[test]
 fn export_refuses_to_touch_the_input() {
     let inp = fixture();
-    let e = export(&inp, "drawbox=x=0:y=0:w=8:h=8:color=red@1:t=fill", &inp, &|_| {}, &|_| {}, &NO_CANCEL);
+    let e = export(&inp, &plan("drawbox=x=0:y=0:w=8:h=8:color=red@1:t=fill"), &inp,
+                   &|_| {}, &|_| {}, &NO_CANCEL);
     assert!(e.is_err(), "must refuse to overwrite the input");
-    assert!(export(&inp, "  ", &tmp().join("x.mp4"), &|_| {}, &|_| {}, &NO_CANCEL).is_err(), "must refuse an empty graph");
+    assert!(export(&inp, &plan("  "), &tmp().join("x.mp4"), &|_| {}, &|_| {}, &NO_CANCEL).is_err(),
+            "must refuse an empty graph");
 }
 
 /* ------------------------------------------------------- OCR (Windows) */
@@ -360,7 +439,7 @@ mod win {
         assert!(!graph.trim().is_empty());
 
         let out = tmp().join("roundtrip.mp4");
-        export(&inp, &graph, &out, &|_| {}, &|_| {}, &NO_CANCEL).unwrap();
+        export(&inp, &plan(&graph), &out, &|_| {}, &|_| {}, &NO_CANCEL).unwrap();
 
         let after = ocr(&out);
         let left = hits(&after);
@@ -416,7 +495,7 @@ mod moving {
         println!("graph is {} bytes", graph.len());
 
         let out = tmp().join("moving-out.mp4");
-        let rep = export(&inp, &graph, &out, &|_| {}, &|_| {}, &NO_CANCEL);
+        let rep = export(&inp, &plan(&graph), &out, &|_| {}, &|_| {}, &NO_CANCEL);
         match &rep {
             Err(e) => panic!("EXPORT FAILED with a {}-byte graph:\n{e}", graph.len()),
             Ok(_) => {}

@@ -80,6 +80,17 @@
           padding:2px 6px; border-radius:3px; font-size:11px; line-height:1.4; }
   #seek { flex:1; min-width:80px; accent-color:var(--acc); padding:0; }
 
+  /* the bleep track: a second timeline under the transport, same span as the video */
+  #btrack { position:relative; height:20px; border:1px solid var(--line); border-radius:4px;
+            background:var(--ctl); cursor:crosshair; overflow:hidden; flex:1; min-width:80px; }
+  #btrack .bl { position:absolute; top:0; bottom:0; background:var(--fuzz); opacity:.65;
+                border-left:1px solid var(--fuzz); border-right:1px solid var(--fuzz);
+                cursor:pointer; }
+  #btrack .bl.sel { opacity:1; outline:1px solid var(--acc); outline-offset:-1px; }
+  #btrack .ph { position:absolute; top:0; bottom:0; width:1px; background:var(--acc); }
+  #btrack .lbl { position:absolute; left:5px; top:3px; font-size:10.5px; color:var(--dim);
+                 pointer-events:none; }
+
   /* string list */
   .grp { border-radius:4px; }
   .grp-head, .mem { display:flex; gap:6px; align-items:center; padding:3px 4px;
@@ -234,6 +245,14 @@
         <span class="hint" style="margin-left:auto" data-i18n="t.keys">← → step · Shift ×10 ·
           Home/End · Space plays · drag on the video to draw a box</span>
       </div>
+      <div class="row" style="margin-top:8px">
+        <span class="hint" data-i18n="bl.title" data-i18n-title="bl.title.title">bleeps</span>
+        <div id="btrack"><span class="lbl" data-i18n="bl.hint">drag to bleep</span></div>
+        <button id="bladd" data-i18n="bl.add" data-i18n-title="bl.add.title">+ 1 s here</button>
+        <button id="bldel" class="danger" data-i18n="bl.del">remove</button>
+      </div>
+      <div id="bllist"></div>
+      <div class="hint" id="blstat"></div>
     </div>
 
     <div class="panel grow adv" id="check">
@@ -289,6 +308,12 @@
         <span class="hint" id="fname" style="margin-left:auto" data-i18n="p.unsaved">unsaved</span></h2>
       <div class="row">
         <button id="export" class="solid" style="flex:1" data-i18n="p.export">render redacted video…</button>
+      </div>
+      <div class="row adv">
+        <label data-i18n-title="p.strip.title">
+          <input type="checkbox" id="strip" checked>
+          <span class="hint" data-i18n="p.strip">strip metadata and extra tracks</span>
+        </label>
       </div>
       <div class="row">
         <button id="save" data-i18n="p.save">save</button>
@@ -459,6 +484,25 @@ function graph(src) {
     return `drawbox=x=${p('x')}:y=${p('y')}:w=${p('w')}:h=${p('h')}`
          + `:color=${b.color || 'black'}@1:t=fill:enable=${en}`;
   }).join(',');
+}
+
+/* Bleeps: the stretches where the audio is replaced by a tone.
+
+   A tone rather than silence on purpose. Silence is indistinguishable from a gap in the
+   recording, so a listener cannot tell whether something was removed or was never there; a
+   1 kHz beep is unmistakably an edit, which is what an exhibit should say about itself.
+
+   The original is muted over the bleeps, the tone is muted everywhere else, and the two are
+   summed. `normalize=0` keeps amix from halving both — without it every export would come back
+   6 dB quieter than the source. */
+function bleepGraph(bleeps) {
+  const b = mergeSpans((bleeps || []).map(x => ({ s:+x.s, e:+x.e }))
+                                     .filter(x => x.e > x.s && isFinite(x.s) && isFinite(x.e)));
+  if (!b.length) return '';
+  const en = b.map(s => `between(t,${+s.s.toFixed(3)},${+s.e.toFixed(3)})`).join('+');
+  return `[0:a]volume=0:enable='${en}'[voice];`
+       + `[1:a]volume=0:enable='not(${en})'[beep];`
+       + `[voice][beep]amix=inputs=2:normalize=0:duration=first[aout]`;
 }
 
 /* ---------- §6 string index and matching ---------- */
@@ -1160,6 +1204,17 @@ function selfTest() {
     ({ t:+(i*dtE).toFixed(4), rect:[100,100,50,20], kind:'exact', text:'x' }));
   ok(exposedGaps(solid, optE(0)).length === 0, 'an unbroken reading reports nothing exposed');
 
+  /* Bleeps. Overlapping ranges must merge, or the tone is summed with itself and clips. */
+  ok(bleepGraph([]) === '', 'no bleeps, no audio graph', bleepGraph([]));
+  ok(bleepGraph([{s:2,e:1}]) === '', 'a backwards range is not a bleep');
+  const bg = bleepGraph([{s:1,e:2}, {s:1.5,e:3}]);
+  ok((bg.match(/between/g) || []).length === 2, 'overlapping bleeps merge into one range', bg);
+  ok(bg.includes('between(t,1,3)'), 'merged range spans both', bg);
+  ok(bg.includes('normalize=0'), 'amix must not halve the mix', bg);
+  ok(bg.includes("[voice][beep]amix") && bg.endsWith('[aout]'), 'graph ends at [aout]', bg);
+  ok(bleepGraph([{s:0,e:1}]).includes("volume=0:enable='not(between(t,0,1))'"),
+     'the tone is muted outside the bleep', bleepGraph([{s:0,e:1}]));
+
   /* --- acceptance test 7: hash guard --- */
   ok(hashGuard({ video_sha256:'aa', video:'a.mp4' }, { sha256:'aa' }) === null, 'same hash passes');
   ok(typeof hashGuard({ video_sha256:'aa', video:'a.mp4' }, { sha256:'bb' }) === 'string',
@@ -1172,7 +1227,7 @@ function selfTest() {
 if (typeof module !== 'undefined') module.exports = {
   at, rectAt, visible, expr, evalExpr, graph, normalize, lev, buildIndex, matchLines,
   nearMisses, groupMisses, toTracks, exposedGaps, clusterTracks, mergeSpans, hashGuard,
-  groupStrings, simplify, selfTest,
+  groupStrings, simplify, bleepGraph, selfTest,
 };
 /* ==================== PURE END ==================== */
 selfTest();
@@ -1197,6 +1252,7 @@ let expanded = new Set();      // expanded group keys
 let gen = null;                // {hits, dropped, misses, tracks, queries}
 let hitIdx = 0, peekUntil = 0, projectPath = null, lastExport = null;
 let ffLog = [], ffLast = '';
+let bleeps = [], selBleep = null;
 let tab = 'hits';
 
 /* ==================== language ====================
@@ -1254,6 +1310,19 @@ en: {
   'p.title':'project', 'p.unsaved':'unsaved', 'p.export':'render redacted video…',
   'p.save':'save', 'p.saveas':'save as…', 'p.open':'open…', 'p.reset':'reset',
   'p.showout':'open the export folder',
+  'p.strip':'strip metadata and extra tracks',
+  'p.strip.title':'Drops the source file\u2019s metadata (title, comments, device, location), its '
+                 +'chapters, and every subtitle and data stream. A subtitle track can spell out '
+                 +'the very text the bars cover.',
+  'bl.title':'bleeps', 'bl.title.title':'Stretches where the sound is replaced by a 1 kHz tone. '
+                                       +'Drag on the track to add one.',
+  'bl.hint':'drag to bleep', 'bl.add':'+ 1 s here',
+  'bl.add.title':'add a one-second bleep starting at the playhead',
+  'bl.del':'remove', 'bl.none':'no audio track in this video — nothing to bleep',
+  'bl.n':(n,secs) => `${n} bleep(s), ${secs}s of audio replaced by a tone`,
+  'worry.bleeps':(n,secs) => `${n} bleep(s) covering ${secs}s — everything else in the audio is `
+                           + `kept as it is`,
+  'worry.audio':'the sound is copied through untouched — nothing spoken is redacted',
   'p.showout.title':'Show the last rendered video in Explorer, with its redaction log beside it.',
   'b.title':'boxes', 'b.clear':'clear', 'b.clear.title':'remove every box',
   'b.empty':'none yet — pick text on the left, or drag on the video',
@@ -1385,6 +1454,18 @@ de: {
   'p.save':'speichern', 'p.saveas':'speichern unter…', 'p.open':'öffnen…',
   'p.reset':'zurücksetzen',
   'p.showout':'Ausgabeordner öffnen',
+  'p.strip':'Metadaten und Zusatzspuren entfernen',
+  'p.strip.title':'Entfernt die Metadaten der Quelle (Titel, Kommentare, Gerät, Ort), ihre Kapitel '
+                 +'sowie alle Untertitel- und Datenspuren. Eine Untertitelspur kann genau den Text '
+                 +'enthalten, den die Balken verdecken.',
+  'bl.title':'Piepser', 'bl.title.title':'Abschnitte, in denen der Ton durch einen 1-kHz-Ton '
+                                        +'ersetzt wird. Zum Anlegen auf der Spur ziehen.',
+  'bl.hint':'ziehen zum Piepsen', 'bl.add':'+ 1 s hier',
+  'bl.add.title':'einen Piepser von einer Sekunde ab der Abspielposition einfügen',
+  'bl.del':'entfernen', 'bl.none':'kein Ton in diesem Video — nichts zu piepsen',
+  'bl.n':(n,secs) => `${n} Piepser, ${secs}s Ton ersetzt`,
+  'worry.bleeps':(n,secs) => `${n} Piepser über ${secs}s — der übrige Ton bleibt unverändert`,
+  'worry.audio':'der Ton wird unverändert übernommen — Gesprochenes wird nicht geschwärzt',
   'p.showout.title':'Zeigt das zuletzt gerenderte Video im Explorer, mit dem Protokoll daneben.',
   'b.title':'Balken', 'b.clear':'leeren', 'b.clear.title':'alle Balken entfernen',
   'b.empty':'noch keine — links Text auswählen oder im Video ziehen',
@@ -1483,7 +1564,7 @@ function applyLang() {
   for (const el of document.querySelectorAll('[data-i18n-title]')) el.title = tx(el.dataset.i18nTitle);
   for (const el of document.querySelectorAll('[data-i18n-ph]')) el.placeholder = tx(el.dataset.i18nPh);
   $('misshint').innerHTML = tx('s4.miss.hint');
-  showVideo();
+  showVideo(); drawBleeps();
   $('loghow').textContent = tx($('fflog').hidden ? 'ff.show' : 'ff.hide');
   if (!projectPath) $('fname').textContent = tx('p.unsaved');
   render(); drawCheck();
@@ -1584,6 +1665,8 @@ function draw() {
     ctx.strokeRect(h.rect[0]*s, h.rect[1]*s, h.rect[2]*s, h.rect[3]*s); ctx.setLineDash([]);
   }
   $('clock').textContent = t.toFixed(2) + ' s';
+  const ph = btrack.querySelector('.ph');
+  if (ph && bdur()) ph.style.left = `${100 * clamp(t / bdur(), 0, 1)}%`;
   if (document.activeElement !== seek) seek.value = t;
   requestAnimationFrame(draw);
 }
@@ -1637,6 +1720,99 @@ cv.addEventListener('pointerup', () => {
   }
   drag = null; render();
 });
+
+/* ---------- bleeps ----------
+   A second timeline the width of the clip. Drag lays down a range, clicking one selects it,
+   Delete removes it — the same gestures as drawing a box on the video, because it is the same
+   job done to the other track. */
+const btrack = $('btrack');
+const bdur = () => (info ? info.duration : vid.duration) || 0;
+const toT = e => {
+  const r = btrack.getBoundingClientRect();
+  return clamp((e.clientX - r.left) / r.width, 0, 1) * bdur();
+};
+
+function drawBleeps() {
+  const d = bdur();
+  btrack.querySelectorAll('.bl,.ph').forEach(n => n.remove());
+  const lbl = btrack.querySelector('.lbl');
+  if (lbl) lbl.hidden = bleeps.length > 0;
+  if (d > 0) for (const b of bleeps) {
+    const el = document.createElement('div');
+    el.className = 'bl' + (b === selBleep ? ' sel' : '');
+    el.style.left = `${100 * b.s / d}%`;
+    el.style.width = `${Math.max(0.4, 100 * (b.e - b.s) / d)}%`;
+    el.title = `${b.s.toFixed(2)} → ${b.e.toFixed(2)}s`;
+    el.onpointerdown = ev => { ev.stopPropagation(); selBleep = b; seekTo(b.s); drawBleeps(); };
+    btrack.appendChild(el);
+  }
+  if (d > 0) {
+    const ph = document.createElement('div');
+    ph.className = 'ph';
+    ph.style.left = `${100 * clamp(vid.currentTime / d, 0, 1)}%`;
+    btrack.appendChild(ph);
+  }
+
+  const list = $('bllist');
+  list.innerHTML = '';
+  [...bleeps].sort((a, b) => a.s - b.s).forEach(b => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    for (const k of ['s', 'e']) {
+      const inp = document.createElement('input');
+      inp.type = 'number'; inp.step = '0.01'; inp.value = +b[k].toFixed(2);
+      inp.style.width = '66px';
+      inp.oninput = () => { b[k] = +inp.value; drawBleeps(); };
+      const set = document.createElement('button');
+      set.textContent = '⌖'; set.title = tx('bl.add.title');
+      set.onclick = () => { b[k] = now(); drawBleeps(); };
+      row.append(inp, set);
+    }
+    const x = document.createElement('span');
+    x.className = 'x'; x.textContent = '×';
+    x.onclick = () => { bleeps = bleeps.filter(q => q !== b); selBleep = null; drawBleeps(); };
+    row.appendChild(x);
+    list.appendChild(row);
+  });
+
+  const secs = mergeSpans(bleeps).reduce((n, b) => n + (b.e - b.s), 0);
+  $('blstat').innerHTML = !info ? ''
+    : !info.has_audio ? `<span class="warn">${tx('bl.none')}</span>`
+    : bleeps.length ? tx('bl.n', bleeps.length, secs.toFixed(2)) : '';
+  btrack.style.opacity = info && !info.has_audio ? .4 : 1;
+}
+
+let bdrag = null;
+btrack.addEventListener('pointerdown', e => {
+  if (!bdur() || (info && !info.has_audio)) return;
+  btrack.setPointerCapture(e.pointerId);
+  const t = toT(e);
+  bdrag = { s: t, b: { s: t, e: t } };
+  bleeps.push(bdrag.b); selBleep = bdrag.b; drawBleeps();
+});
+btrack.addEventListener('pointermove', e => {
+  if (!bdrag) return;
+  const t = toT(e);
+  bdrag.b.s = Math.min(bdrag.s, t);
+  bdrag.b.e = Math.max(bdrag.s, t);
+  drawBleeps();
+});
+btrack.addEventListener('pointerup', () => {
+  // a click rather than a drag would leave a zero-length range that bleeps nothing
+  if (bdrag && bdrag.b.e - bdrag.b.s < 0.05) {
+    bleeps = bleeps.filter(b => b !== bdrag.b);
+    selBleep = null;
+  }
+  bdrag = null; drawBleeps();
+});
+$('bladd').onclick = () => {
+  const s = now(), b = { s, e: Math.min(s + 1, bdur() || s + 1) };
+  bleeps.push(b); selBleep = b; drawBleeps();
+};
+$('bldel').onclick = () => {
+  if (!selBleep) return;
+  bleeps = bleeps.filter(b => b !== selBleep); selBleep = null; drawBleeps();
+};
 
 /* ---------- boxes panel ---------- */
 function render() {
@@ -1752,11 +1928,12 @@ $('reset').onclick = async () => {
   if (!await ask(tx('ask.reset'))) return;
   boxes = []; sel = null; gen = null; ocr = null; index = []; groups = [];
   checked.clear(); expanded.clear(); projectPath = null; lastExport = null;
+  bleeps = []; selBleep = null;
   $('lastrow').hidden = true;
   setName(null); showVideo(); $('ocrstat').textContent = '';
   $('genstat').textContent = ''; $('expstat').textContent = '';
   $('rx').disabled = true; $('rx').value = '';
-  render(); drawCheck();
+  render(); drawCheck(); drawBleeps();
 };
 addEventListener('keydown', e => {
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
@@ -1767,7 +1944,10 @@ addEventListener('keydown', e => {
     if (e.key === 'Home')       { e.preventDefault(); seekTo(0); }
     if (e.key === 'End')        { e.preventDefault(); seekTo(lastFrame()); }
   }
-  if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && sel) { e.preventDefault(); deleteSel(); }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !typing) {
+    if (sel) { e.preventDefault(); deleteSel(); }
+    else if (selBleep) { e.preventDefault(); $('bldel').onclick(); }
+  }
   if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('save').onclick(); }
 });
 
@@ -1785,8 +1965,9 @@ async function loadVideo(path) {
     $('rate').value = fps;
     vid.onloadedmetadata = () => { seek.max = vid.duration; fit(); render(); };
     ocr = null; index = []; groups = []; checked.clear(); gen = null;
+    bleeps = []; selBleep = null;
     $('rx').disabled = true;
-    render(); drawCheck();
+    render(); drawCheck(); drawBleeps();
   } catch (e) { err(e); }
 }
 $('pick').onclick = async () => {
@@ -2128,7 +2309,7 @@ $('peeka').onclick = () => { const s = curSpan(); if (s) peekAt(s.e + 1/(+$('fps
 /* ---------- export ---------- */
 $('export').onclick = async () => {
   if (!videoPath) return say(tx('err.novideo'), 'err');
-  if (!boxes.length) return say(tx('err.noboxes'), 'err');
+  if (!boxes.length && !bleeps.length) return say(tx('err.noboxes'), 'err');
   /* Simple mode has no review panels to send anyone to, so the gate would be a dialog listing
      things the user cannot then go and look at. Advanced keeps it — and so does simple the moment
      a dropout was left uncovered, because that one is not a thing to review, it is text about to
@@ -2139,6 +2320,9 @@ $('export').onclick = async () => {
     const worries = [];
     if (gen.exposed && gen.exposed.length)
       worries.push(tx('worry.exposed', gen.exposed.length, !simple()));
+    const bsecs = mergeSpans(bleeps).reduce((n,b) => n + (b.e - b.s), 0);
+    worries.push(bleeps.length ? tx('worry.bleeps', bleeps.length, bsecs.toFixed(2))
+                               : tx('worry.audio'));
     if (nmiss) worries.push(tx('worry.miss', nmiss));
     if (gaps) worries.push(tx('worry.gaps', gaps));
     if (!await ask(tx('ask.export', gen.hits.length, gen.queries.length, worries))) return;
@@ -2151,12 +2335,17 @@ $('export').onclick = async () => {
   $('exprow').hidden = false; $('expstat').textContent = tx('exp.start');
   try {
     const rep = await invoke('export', {
-      path: videoPath, filtergraph: graph(boxes), out,
+      path: videoPath, out,
+      plan: { filtergraph: graph(boxes), audio: bleepGraph(bleeps), strip: $('strip').checked },
       meta: {
         tool: 'Redakt', ocr_engine: ocr ? ocr.engine : null, lang: ocr ? ocr.lang : null,
         rate: ocr ? ocr.rate : null, ocr_scale: ocr ? ocr.ocr_scale : null,
         redacted_strings: gen ? gen.queries : [],
         bridge_seconds: +$('gapSec').value, margin_px: +$('padPx').value,
+        bleeps: mergeSpans(bleeps).map(b => ({ from:+b.s.toFixed(3), to:+b.e.toFixed(3) })),
+        audio: bleeps.length ? 'bleeped where listed; copied through elsewhere'
+                             : 'copied through untouched',
+        stripped_metadata: $('strip').checked,
         boxes: boxes.map(b => ({ color:b.color, generated: !!b.gen,
                                  query: b.gen ? b.gen.query : null,
                                  spans:b.spans.length, keyframes:b.kfs.length,
@@ -2237,6 +2426,8 @@ const project = () => ({
                duration: ocr.duration, ocr_scale: ocr.ocr_scale, generated: ocr.generated } : null,
   boxes: boxes.map(b => ({ ...b,
     gen: b.gen ? { query:b.gen.query, gaps:b.gen.gaps } : undefined })),
+  bleeps: bleeps.map(b => ({ s:+b.s.toFixed(3), e:+b.e.toFixed(3) })),
+  strip: $('strip').checked,
 });
 
 function applyProject(p) {
@@ -2252,8 +2443,11 @@ function applyProject(p) {
   if (p.ocr && info && p.ocr.video_sha256 === info.sha256) {
     ocr = p.ocr; index = buildIndex(ocr.lines); groups = groupStrings(index); $('rx').disabled = false;
   }
+  bleeps = (p.bleeps || []).map(b => ({ s:+b.s, e:+b.e }));
+  selBleep = null;
+  if (typeof p.strip === 'boolean') $('strip').checked = p.strip;
   nextId = boxes.length + 1; sel = null; gen = null; checked.clear(); expanded.clear();
-  render(); drawCheck();
+  render(); drawCheck(); drawBleeps();
   $('ocrstat').textContent = ocr
     ? tx('ocr.reused', ocr.lines.length, ocr.lang, ocr.rate)
     : (p.ocr ? tx('ocr.dropped') : '');
@@ -2301,6 +2495,7 @@ async function drawRecent() {
   }
 }
 if (IS_TAURI) drawRecent();
+drawBleeps();
 
 /* ---------- start ----------
    Settings are restored before the first paint, so the window does not flash the wrong theme or

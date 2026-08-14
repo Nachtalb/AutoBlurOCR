@@ -3,7 +3,7 @@
 //! Thin Tauri wrapper. All state lives in the frontend's box model; the backend is stateless
 //! apart from the cancel flag.
 
-use redakt::{Error, ExportReport, OcrOpts, OcrResult, VideoInfo};
+use redakt::{Error, ExportReport, OcrOpts, OcrResult, Plan, VideoInfo};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -94,7 +94,7 @@ async fn ocr_video(app: AppHandle, path: String, rate: f64, lang: String) -> R<O
 async fn export(
     app: AppHandle,
     path: String,
-    filtergraph: String,
+    plan: Plan,
     out: String,
     meta: Value,
 ) -> R<ExportReport> {
@@ -111,7 +111,7 @@ async fn export(
             let _ = b.emit("export://log", line);
         };
         let report = redakt::export(
-            Path::new(&path), &filtergraph, Path::new(&out), &progress, &log, &CANCEL_EXPORT)?;
+            Path::new(&path), &plan, Path::new(&out), &progress, &log, &CANCEL_EXPORT)?;
 
         // §10: the artefact that answers "what exactly did you do to this video"
         let mut log = serde_json::to_value(&report)?;

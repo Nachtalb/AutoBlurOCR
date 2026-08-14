@@ -102,6 +102,21 @@ panic. The orphaned ffmpeg then blocks forever writing into a pipe nobody drains
 waits in `Drop`, so no early return has to remember; `a_dropped_frame_reader_leaves_no_ffmpeg_behind`
 fails without it.
 
+**A redaction is not only the picture.** Three things carried the redacted text straight through
+an otherwise perfect export: the audio, a subtitle stream repeating it verbatim, and metadata
+naming the source. Bleeps replace stretches of sound with a 1 kHz tone rather than silence,
+because silence is indistinguishable from a gap in the recording and a beep is unmistakably an
+edit. `strip` (on by default, an advanced setting) adds `-map_metadata -1 -map_chapters -1 -sn
+-dn` and explicit maps. `bleeps_replace_the_audio_and_strip_removes_the_other_tracks` builds a
+fixture carrying all three and fails if any survives.
+
+The audio graph is a second script file with the same `-/filter_complex` vs `-filter_complex_script`
+generation split as the video one, and one flag index picks both. The tone is a second `lavfi`
+input; the original is muted over the bleeps, the tone muted everywhere else, and `amix` sums
+them — `normalize=0` or every export comes back 6 dB quieter than its source. Audio is only
+re-encoded when there is a bleep; otherwise it is still copied, because re-encoding an exhibit's
+sound for nothing is a loss with no purchase.
+
 **A dropout the bridge refuses to cross is a hole, and it has to be reported.** The span closes,
 the box goes off, and the text is on screen for those frames. Span padding covers one sampling
 interval either side, so a dropout is covered when it is no longer than two of them; anything
