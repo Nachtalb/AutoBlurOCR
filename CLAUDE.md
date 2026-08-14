@@ -110,6 +110,11 @@ edit. `strip` (on by default, an advanced setting) adds `-map_metadata -1 -map_c
 -dn` and explicit maps. `bleeps_replace_the_audio_and_strip_removes_the_other_tracks` builds a
 fixture carrying all three and fails if any survives.
 
+Bleeps never overlap. Two sharing a stretch would sum the tone with itself and clip, and there is
+no meaning in "bleeped twice", so every edit — drag, edge-resize, typed value, the button — is
+clamped against its neighbours as it happens rather than merged afterwards. A drag stops at the
+next bleep instead of sliding through it.
+
 The audio graph is a second script file with the same `-/filter_complex` vs `-filter_complex_script`
 generation split as the video one, and one flag index picks both. The tone is a second `lavfi`
 input; the original is muted over the bleeps, the tone muted everywhere else, and `amix` sums
@@ -122,9 +127,18 @@ the box goes off, and the text is on screen for those frames. Span padding cover
 interval either side, so a dropout is covered when it is no longer than two of them; anything
 longer than that and longer than the bridge is exposed. Measured over 200 randomised scrolls,
 2.5% of frames leak at a bridge of 0, 0.5% at 0.1 and 0.06% at 0.2 — and none of it was reported
-anywhere until `exposedGaps` existed. It reports every refused gap with no upper bound on length
-and no test of whether the text moved in between: over-reporting a warning costs a line in a
-list, under-reporting it costs the disclosure. The warning appears next to the generate button
+anywhere until `exposedGaps` existed.
+
+It reports gaps inside one track, up to `LOST` (2 s). The first version compared every reading to
+the next, which made the time between two separate appearances of the same string look like an
+uncovered dropout: eleven false alarms on a file whose render was clean. A warning that is
+usually wrong trains you to dismiss the one that matters. Association is `clusterTracks`, asked
+with a stale window that does NOT depend on the bridge — clustering at the bridge is circular,
+splitting the track at exactly the dropouts being looked for, so the report goes quiet precisely
+when it matters. Measured over 200 randomised scrolls: per-reading caught 87% of leaking frames
+with false alarms, clustering at the bridge caught 40% with none, clustering at `LOST` catches
+87% with none. Anything from 0.5 s to 5 s measured identically, so the figure is not
+load-bearing; having a bound at all is. The warning appears next to the generate button
 (the only place simple mode can show it), in the review panel, and it forces the pre-export
 dialog even in simple mode. The bridge itself defaults to 0 and is an advanced setting, so the
 simple-mode wording says where to find it rather than naming a control that is not on screen.

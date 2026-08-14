@@ -85,7 +85,10 @@
             background:var(--ctl); cursor:crosshair; overflow:hidden; flex:1; min-width:80px; }
   #btrack .bl { position:absolute; top:0; bottom:0; background:var(--fuzz); opacity:.65;
                 border-left:1px solid var(--fuzz); border-right:1px solid var(--fuzz);
-                cursor:pointer; }
+                cursor:move; }
+  #btrack .bl::before, #btrack .bl::after { content:''; position:absolute; top:0; bottom:0;
+                width:5px; cursor:ew-resize; }
+  #btrack .bl::before { left:-1px; } #btrack .bl::after { right:-1px; }
   #btrack .bl.sel { opacity:1; outline:1px solid var(--acc); outline-offset:-1px; }
   #btrack .ph { position:absolute; top:0; bottom:0; width:1px; background:var(--acc); }
   #btrack .lbl { position:absolute; left:5px; top:3px; font-size:10.5px; color:var(--dim);
@@ -932,23 +935,42 @@ function toTracks(occs, opts) {
    0.2 — and until this existed none of it was reported anywhere. A leak the operator is told
    about is a decision; a leak nobody mentions is the failure this tool exists to prevent.
 
-   Every refused gap is reported, with no upper bound on its length and no test of whether the
-   text moved in between. Over-reporting a warning costs a line in a list. Under-reporting it
-   costs the disclosure. */
+   Only gaps INSIDE one track count, and only up to `LOST`. A first pass compared every reading
+   to the next one, which made the time between two separate appearances of the same string — a
+   chat name scrolling past at 0:05 and again at 2:00 — look like an uncovered dropout. It
+   reported eleven of those on a file whose render was clean. A warning that is usually wrong is
+   worse than no warning: it trains you to dismiss the one that matters.
+
+   `clusterTracks` already decides what counts as the same text continuing, so ask it rather than
+   invent a second rule — but ask it with a stale window that does NOT depend on the bridge.
+   Clustering at the bridge is circular: a low bridge splits the track at exactly the dropouts
+   being looked for, and the report goes quiet precisely when it matters. Measured over the same
+   200 randomised scrolls: per-reading caught 87% of leaking frames with false alarms, clustering
+   at the bridge caught 40% with none, and clustering at `LOST` catches 87% with none.
+
+   Two seconds because past that, raising the bridge is not the fix — a box held over seconds of
+   text nobody read is a guess, not coverage. Anything from 0.5 s to 5 s measured identically, so
+   the exact figure is not load-bearing; having a bound at all is. */
+const LOST = 2;
+
 function exposedGaps(occs, opts) {
   const dt = 1 / opts.rate;
-  const covered = Math.max(opts.gapBridgeSec ?? 0.5, 2 * dt);
-  const os = [...occs].sort((a, b) => a.t - b.t);
+  const GAP = Math.max(opts.gapBridgeSec ?? 0.5, dt);
+  const covered = Math.max(GAP, 2 * dt);       // the span padding reaches one interval either way
+  const lim = Math.max(GAP, LOST);
   const out = [];
-  for (let i = 1; i < os.length; i++) {
-    const g = os[i].t - os[i-1].t;
-    if (g <= covered + 1e-9) continue;
-    /* Reported as the readings either side, not as the uncovered window itself: rounding a
-       window inward hides the frame at its edge, and the reading either side is what the
-       operator wants to jump to anyway. `len` is the part that is genuinely uncovered. */
-    out.push({ from:os[i-1].t, to:os[i].t, len:+(g - 2*dt).toFixed(3) });
+  for (const tr of clusterTracks([...occs].sort((a, b) => a.t - b.t), lim)) {
+    const os = tr.occs;                        // pushed in frame order
+    for (let i = 1; i < os.length; i++) {
+      const g = os[i].t - os[i-1].t;
+      if (g <= covered + 1e-9 || g > lim + 1e-9) continue;
+      /* Reported as the readings either side, not as the uncovered window itself: rounding a
+         window inward hides the frame at its edge, and the reading either side is what the
+         operator wants to jump to anyway. `len` is the part that is genuinely uncovered. */
+      out.push({ from:os[i-1].t, to:os[i].t, len:+(g - 2*dt).toFixed(3) });
+    }
   }
-  return out;
+  return out.sort((a, b) => a.from - b.from);
 }
 
 /* ---------- §10 hash guard ---------- */
@@ -1199,6 +1221,19 @@ function selfTest() {
   const trk = toTracks(withGap, optE(0.2));
   for (let t = ex[0].from + dtE + 1e-4; t < ex[0].to - dtE - 1e-4; t += dtE)
     ok(!trk.some(b => visible(b, +t.toFixed(4))), 'no box covers a reported exposed stretch', t);
+  /* The same string appearing twice, minutes apart, is not an uncovered dropout — it is two
+     appearances with nothing in between. Reporting those is what made the warning noise. */
+  const twice = [];
+  for (let i = 0; i < 30; i++)
+    twice.push({ t:+(i*dtE).toFixed(4), rect:[300, 500 - i*4, 260, 44], kind:'exact', text:'x' });
+  for (let i = 0; i < 30; i++)
+    twice.push({ t:+(100 + i*dtE).toFixed(4), rect:[300, 900 - i*4, 260, 44], kind:'exact', text:'x' });
+  ok(exposedGaps(twice, optE(0)).length === 0, 'two separate appearances are not a dropout',
+     JSON.stringify(exposedGaps(twice, optE(0))));
+  const same = twice.map(o => ({ ...o, rect:[300, 500, 260, 44] }));
+  ok(exposedGaps(same, optE(0)).length === 0, 'nor when they land in the same place',
+     JSON.stringify(exposedGaps(same, optE(0))));
+
   // consecutive samples are never reported, at any bridge
   const solid = Array.from({length:20}, (_,i) =>
     ({ t:+(i*dtE).toFixed(4), rect:[100,100,50,20], kind:'exact', text:'x' }));
@@ -1318,6 +1353,8 @@ en: {
                                        +'Drag on the track to add one.',
   'bl.hint':'drag to bleep', 'bl.add':'+ 1 s here',
   'bl.add.title':'add a one-second bleep starting at the playhead',
+  'bl.set.title':'set from the playhead',
+  'bl.busy':'there is already a bleep at the playhead',
   'bl.del':'remove', 'bl.none':'no audio track in this video — nothing to bleep',
   'bl.n':(n,secs) => `${n} bleep(s), ${secs}s of audio replaced by a tone`,
   'worry.bleeps':(n,secs) => `${n} bleep(s) covering ${secs}s — everything else in the audio is `
@@ -1462,6 +1499,8 @@ de: {
                                         +'ersetzt wird. Zum Anlegen auf der Spur ziehen.',
   'bl.hint':'ziehen zum Piepsen', 'bl.add':'+ 1 s hier',
   'bl.add.title':'einen Piepser von einer Sekunde ab der Abspielposition einfügen',
+  'bl.set.title':'von der Abspielposition übernehmen',
+  'bl.busy':'an der Abspielposition liegt bereits ein Piepser',
   'bl.del':'entfernen', 'bl.none':'kein Ton in diesem Video — nichts zu piepsen',
   'bl.n':(n,secs) => `${n} Piepser, ${secs}s Ton ersetzt`,
   'worry.bleeps':(n,secs) => `${n} Piepser über ${secs}s — der übrige Ton bleibt unverändert`,
@@ -1732,6 +1771,17 @@ const toT = e => {
   return clamp((e.clientX - r.left) / r.width, 0, 1) * bdur();
 };
 
+/* Ranges never overlap: two bleeps sharing a stretch would sum the tone with itself and clip,
+   and there is no meaning in "bleeped twice". Every edit is clamped against the neighbours
+   rather than fixed up afterwards, so a drag stops at the next bleep instead of sliding through
+   it and being silently merged. */
+const ordered = () => [...bleeps].sort((a, b) => a.s - b.s);
+function room(b) {
+  const o = ordered(), i = o.indexOf(b);
+  return { lo: i > 0 ? o[i-1].e : 0, hi: i < o.length - 1 ? o[i+1].s : (bdur() || Infinity) };
+}
+const MINBL = 0.05;   // shorter than this is a mis-click, not a bleep
+
 function drawBleeps() {
   const d = bdur();
   btrack.querySelectorAll('.bl,.ph').forEach(n => n.remove());
@@ -1743,7 +1793,17 @@ function drawBleeps() {
     el.style.left = `${100 * b.s / d}%`;
     el.style.width = `${Math.max(0.4, 100 * (b.e - b.s) / d)}%`;
     el.title = `${b.s.toFixed(2)} → ${b.e.toFixed(2)}s`;
-    el.onpointerdown = ev => { ev.stopPropagation(); selBleep = b; seekTo(b.s); drawBleeps(); };
+    el.onpointerdown = ev => {
+      ev.stopPropagation();
+      btrack.setPointerCapture(ev.pointerId);
+      selBleep = b;
+      const x = ev.clientX - el.getBoundingClientRect().left;
+      const edge = el.offsetWidth <= 12 ? (x < el.offsetWidth / 2 ? 's' : 'e')
+                 : x <= 5 ? 's' : x >= el.offsetWidth - 5 ? 'e' : null;
+      bdrag = { b, mode: edge || 'move', grab: toT(ev), s0: b.s, e0: b.e };
+      seekTo(edge === 'e' ? b.e : b.s);
+      drawBleeps();
+    };
     btrack.appendChild(el);
   }
   if (d > 0) {
@@ -1762,10 +1822,15 @@ function drawBleeps() {
       const inp = document.createElement('input');
       inp.type = 'number'; inp.step = '0.01'; inp.value = +b[k].toFixed(2);
       inp.style.width = '66px';
-      inp.oninput = () => { b[k] = +inp.value; drawBleeps(); };
+      const put = v => {
+        const { lo, hi } = room(b);
+        b[k] = k === 's' ? clamp(v, lo, b.e - MINBL) : clamp(v, b.s + MINBL, hi);
+        drawBleeps();
+      };
+      inp.oninput = () => put(+inp.value);
       const set = document.createElement('button');
-      set.textContent = '⌖'; set.title = tx('bl.add.title');
-      set.onclick = () => { b[k] = now(); drawBleeps(); };
+      set.textContent = '⌖'; set.title = tx('bl.set.title');
+      set.onclick = () => put(now());
       row.append(inp, set);
     }
     const x = document.createElement('span');
@@ -1784,29 +1849,49 @@ function drawBleeps() {
 
 let bdrag = null;
 btrack.addEventListener('pointerdown', e => {
-  if (!bdur() || (info && !info.has_audio)) return;
+  if (bdrag || !bdur() || (info && !info.has_audio)) return;
   btrack.setPointerCapture(e.pointerId);
   const t = toT(e);
-  bdrag = { s: t, b: { s: t, e: t } };
-  bleeps.push(bdrag.b); selBleep = bdrag.b; drawBleeps();
+  const b = { s: t, e: t };
+  bleeps.push(b);
+  // a new range may not swallow its neighbours either
+  bdrag = { b, mode: 'new', grab: t, s0: t, e0: t };
+  selBleep = b; drawBleeps();
 });
 btrack.addEventListener('pointermove', e => {
   if (!bdrag) return;
-  const t = toT(e);
-  bdrag.b.s = Math.min(bdrag.s, t);
-  bdrag.b.e = Math.max(bdrag.s, t);
+  const t = toT(e), { b, mode } = bdrag, { lo, hi } = room(b), d = bdur();
+  if (mode === 'new') {
+    b.s = clamp(Math.min(bdrag.grab, t), lo, hi);
+    b.e = clamp(Math.max(bdrag.grab, t), lo, hi);
+  } else if (mode === 's') {
+    b.s = clamp(t, lo, b.e - MINBL);
+  } else if (mode === 'e') {
+    b.e = clamp(t, b.s + MINBL, hi);
+  } else {
+    // move: the whole range slides, keeping its length, stopping at the neighbours
+    const len = bdrag.e0 - bdrag.s0;
+    b.s = clamp(bdrag.s0 + (t - bdrag.grab), lo, Math.min(hi, d || Infinity) - len);
+    b.e = b.s + len;
+  }
   drawBleeps();
 });
 btrack.addEventListener('pointerup', () => {
   // a click rather than a drag would leave a zero-length range that bleeps nothing
-  if (bdrag && bdrag.b.e - bdrag.b.s < 0.05) {
+  if (bdrag && bdrag.mode === 'new' && bdrag.b.e - bdrag.b.s < MINBL) {
     bleeps = bleeps.filter(b => b !== bdrag.b);
     selBleep = null;
   }
   bdrag = null; drawBleeps();
 });
 $('bladd').onclick = () => {
-  const s = now(), b = { s, e: Math.min(s + 1, bdur() || s + 1) };
+  const t = now(), d = bdur() || t + 1;
+  // land in the free stretch at the playhead, never on top of an existing bleep
+  const o = ordered();
+  if (o.some(b => t >= b.s - 1e-9 && t < b.e)) return say(tx('bl.busy'), 'err');
+  const hi = Math.min(d, o.find(b => b.s > t)?.s ?? d);
+  if (hi - t < MINBL) return say(tx('bl.busy'), 'err');
+  const b = { s: t, e: Math.min(t + 1, hi) };
   bleeps.push(b); selBleep = b; drawBleeps();
 };
 $('bldel').onclick = () => {
@@ -1935,6 +2020,24 @@ $('reset').onclick = async () => {
   $('rx').disabled = true; $('rx').value = '';
   render(); drawCheck(); drawBleeps();
 };
+/* The wheel over a number field nudges it, Shift for ten steps. These are timestamps and pixel
+   margins that get adjusted a frame at a time; reaching for the tiny spinner arrows, or
+   select-all-and-retype, for every one of them is the kind of friction that stops people
+   checking their work. Both `input` and `change` are dispatched because handlers here use one
+   or the other, and no field listens for both. */
+addEventListener('wheel', e => {
+  const el = e.target;
+  if (!(el instanceof HTMLInputElement) || el.type !== 'number' || el.disabled || el.readOnly)
+    return;
+  e.preventDefault();
+  const step = (+el.step || 1) * (e.shiftKey ? 10 : 1);
+  const lo = el.min === '' ? -Infinity : +el.min, hi = el.max === '' ? Infinity : +el.max;
+  const v = (+el.value || 0) + (e.deltaY < 0 ? step : -step);
+  el.value = +clamp(v, lo, hi).toFixed(4);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+}, { passive: false });
+
 addEventListener('keydown', e => {
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
   if (e.code === 'Space' && !typing) { e.preventDefault(); play.onclick(); }
