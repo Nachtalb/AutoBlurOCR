@@ -1,6 +1,6 @@
 [package]
 name = "autoblur"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 description = "Offline OCR-driven text redaction for video"
 rust-version = "1.77"

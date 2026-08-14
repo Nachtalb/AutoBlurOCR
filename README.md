@@ -44,7 +44,9 @@ lists the packs you actually have installed, so a missing one is obvious before 
      Jump to the frame either side of a redaction with the boxes switched off to see whether
      anything is readable there.
    - **guessed stretches** — where OCR lost the text for a moment and the box was held across the
-     gap. Worth watching.
+     gap. Worth watching. Any dropout too long to bridge is listed here first, in red: the box is
+     off for those frames and the text is visible. Raise **bridge dropouts up to** until they
+     stop appearing. This one is flagged everywhere, including in simple mode.
    - **almost matched** — text that *nearly* matched what you picked and was left visible. This is
      where a leak hides. One row per distinct reading, however many frames it spans. Read it.
 6. **Render.** You get the redacted video, a log beside it, and buttons to open the folder, play
@@ -59,7 +61,8 @@ Every generated box stays editable, and you can always drag a box on the video b
 Alongside every export, `<output>.redaction-log.json` records the input path and hash, the output
 hash, the tool and ffmpeg versions, the OCR engine, language and sampling rate, the exact
 filtergraph and command line, every redacted string, and per-box counts. Pressing **check the text
-is gone** folds its verdict into the same file.
+is gone** — on the dialog that appears when a render finishes — folds its verdict into the same
+file.
 
 The output is a re-encoded derivative, not a bit-exact copy, and the log says so.
 

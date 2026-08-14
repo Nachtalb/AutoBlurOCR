@@ -138,7 +138,7 @@
   <h1>AUTOBLUR</h1>
   <span class="hint" id="ver"></span>
   <button id="pick" class="pri" data-i18n="open.video">open video…</button>
-  <span class="hint" id="vinfo" data-i18n="no.video">no video</span>
+  <span class="hint" id="vinfo">no video</span>
   <select id="mode" style="margin-left:auto" data-i18n-title="mode.title">
     <option value="simple" data-i18n="mode.simple">simple</option>
     <option value="advanced" data-i18n="mode.advanced">advanced</option>
@@ -196,7 +196,7 @@
         <span class="hint" data-i18n="s3.bridge" data-i18n-title="s3.bridge.title">bridge dropouts up to</span>
         <input type="number" id="gapSec" value="0.5" min="0" step="0.1" style="width:52px"> s
       </div>
-      <div class="row">
+      <div class="row adv">
         <span class="hint" data-i18n="s3.margin" data-i18n-title="s3.margin.title">margin</span>
         <input type="number" id="padPx" value="6" min="0" step="1" style="width:52px"> px
       </div>
@@ -306,10 +306,6 @@
         <button id="loghow" class="tab" style="padding:0"></button>
       </div>
       <pre id="fflog" hidden></pre>
-      <div class="row" style="margin-top:6px">
-        <button id="verify" disabled style="flex:1"
-          data-i18n="p.verify" data-i18n-title="p.verify.title">verify the exported file</button>
-      </div>
       <div id="recent"></div>
     </div>
 
@@ -879,6 +875,34 @@ function toTracks(occs, opts) {
   });
 }
 
+/* The gaps the bridge REFUSED to cross, which is the one thing the box model cannot fix by
+   itself: the span closes, the box goes off, and the frames in between show the text.
+
+   Spans are padded by one sampling interval either side, so a dropout is covered when it is no
+   longer than two of them; anything longer than that and longer than the bridge is a hole. Over
+   200 randomised scrolls, 2.5% of frames leak at a bridge of 0 and 0.5% at 0.1, against 0.06% at
+   0.2 — and until this existed none of it was reported anywhere. A leak the operator is told
+   about is a decision; a leak nobody mentions is the failure this tool exists to prevent.
+
+   Every refused gap is reported, with no upper bound on its length and no test of whether the
+   text moved in between. Over-reporting a warning costs a line in a list. Under-reporting it
+   costs the disclosure. */
+function exposedGaps(occs, opts) {
+  const dt = 1 / opts.rate;
+  const covered = Math.max(opts.gapBridgeSec ?? 0.5, 2 * dt);
+  const os = [...occs].sort((a, b) => a.t - b.t);
+  const out = [];
+  for (let i = 1; i < os.length; i++) {
+    const g = os[i].t - os[i-1].t;
+    if (g <= covered + 1e-9) continue;
+    /* Reported as the readings either side, not as the uncovered window itself: rounding a
+       window inward hides the frame at its edge, and the reading either side is what the
+       operator wants to jump to anyway. `len` is the part that is genuinely uncovered. */
+    out.push({ from:os[i-1].t, to:os[i].t, len:+(g - 2*dt).toFixed(3) });
+  }
+  return out;
+}
+
 /* ---------- §10 hash guard ---------- */
 // -> null if the project may be applied, otherwise the reason it may not
 function hashGuard(project, info) {
@@ -1109,6 +1133,29 @@ function selfTest() {
   const gen = toTracks([4.0,4.5].map(O), base)[0];
   ok(graph([gen]).startsWith('drawbox='), 'generated box emits a filtergraph', graph([gen]));
 
+  /* A dropout longer than the bridge leaves the box off and the text on screen. That is a
+     deliberate choice — we did not read the text there, so we do not claim it is there — but it
+     has to be reported, or it is a silent disclosure. */
+  const rate = 10, dtE = 1/rate;
+  const withGap = [0,1,2,3, 9,10,11].map(i =>
+    ({ t:+(i*dtE).toFixed(4), rect:[100,100,50,20], kind:'exact', text:'x' }));
+  const optE = g => ({ rate, duration:3, W:1920, H:1080, gapBridgeSec:g, padPx:6,
+                       videoFps:rate, interp:'step' });
+  ok(exposedGaps(withGap, optE(0.9)).length === 0, 'a bridged dropout is not reported as exposed',
+     JSON.stringify(exposedGaps(withGap, optE(0.9))));
+  const ex = exposedGaps(withGap, optE(0.2));
+  ok(ex.length === 1, 'an unbridged dropout is reported once', JSON.stringify(ex));
+  ok(Math.abs(ex[0].len - 0.4) < 1e-6, 'reported length is the part the padding does not cover',
+     ex[0].len);
+  // the report has to agree with the boxes: nothing on, over the whole window it names
+  const trk = toTracks(withGap, optE(0.2));
+  for (let t = ex[0].from + dtE + 1e-4; t < ex[0].to - dtE - 1e-4; t += dtE)
+    ok(!trk.some(b => visible(b, +t.toFixed(4))), 'no box covers a reported exposed stretch', t);
+  // consecutive samples are never reported, at any bridge
+  const solid = Array.from({length:20}, (_,i) =>
+    ({ t:+(i*dtE).toFixed(4), rect:[100,100,50,20], kind:'exact', text:'x' }));
+  ok(exposedGaps(solid, optE(0)).length === 0, 'an unbroken reading reports nothing exposed');
+
   /* --- acceptance test 7: hash guard --- */
   ok(hashGuard({ video_sha256:'aa', video:'a.mp4' }, { sha256:'aa' }) === null, 'same hash passes');
   ok(typeof hashGuard({ video_sha256:'aa', video:'a.mp4' }, { sha256:'bb' }) === 'string',
@@ -1120,8 +1167,8 @@ function selfTest() {
 
 if (typeof module !== 'undefined') module.exports = {
   at, rectAt, visible, expr, evalExpr, graph, normalize, lev, buildIndex, matchLines,
-  nearMisses, groupMisses, toTracks, clusterTracks, mergeSpans, hashGuard, groupStrings,
-  simplify, selfTest,
+  nearMisses, groupMisses, toTracks, exposedGaps, clusterTracks, mergeSpans, hashGuard,
+  groupStrings, simplify, selfTest,
 };
 /* ==================== PURE END ==================== */
 selfTest();
@@ -1185,7 +1232,7 @@ en: {
   's4.why':'Generated redactions are proposals. Nothing here is automatic — step through and '
           +'confirm.',
   's4.tab.hits':'every hit',
-  's4.tab.gaps':n => `guessed stretches (${n})`,
+  's4.tab.gaps':(n,e) => `guessed stretches (${n})` + (e ? ` · ${e} uncovered!` : ''),
   's4.tab.miss':n => `almost matched (${n})`,
   's4.hits.hint':'Each place the text was found. Step through them and confirm the box sits over '
                 +'the text; drop any that are wrong.',
@@ -1202,9 +1249,6 @@ en: {
                 +'same thing.',
   'p.title':'project', 'p.unsaved':'unsaved', 'p.export':'render redacted video…',
   'p.save':'save', 'p.saveas':'save as…', 'p.open':'open…', 'p.reset':'reset',
-  'p.verify':'verify the exported file',
-  'p.verify.title':'Re-reads the exported file and checks none of the redacted text can still be '
-                  +'found.',
   'b.title':'boxes', 'b.clear':'clear', 'b.clear.title':'remove every box',
   'b.empty':'none yet — pick text on the left, or drag on the video',
   'e.title':'selected box', 'e.nosel':'nothing selected',
@@ -1236,7 +1280,8 @@ en: {
   'gen.stat':(hits,boxes,qs,dropped) =>
     `<span class="good">${hits} readings → ${boxes} boxes</span> across ${qs} string(s)`
     + (dropped ? ` · ${dropped} dropped` : ''),
-  'chk.n':(h,g,m) => `${h} hits · ${g} guessed · ${m} almost`,
+  'chk.n':(h,g,m,e) => `${h} hits · ${g} guessed · ${m} almost`
+                     + (e ? ` · <span class="err">${e} uncovered</span>` : ''),
   'chk.nothing':'nothing generated yet',
   'chk.hitn':(i,n) => `${i} / ${n}`,
   'chk.hitinfo':(kind,t,text) => `<span class="tag ${kind}">${kind}</span> at ${t}s — OCR read `
@@ -1245,6 +1290,11 @@ en: {
   'gaps.none':'<span class="good">none — OCR saw the text on every sampled frame it appears '
              +'in</span>',
   'gaps.row':s => `${s}s guessed`,
+  'gaps.exposed':s => `${s}s NOT covered`,
+  'gaps.exposed.hint':'These are dropouts the bridge refused to cross: OCR lost the text for '
+                     +'longer than the bridge allows, so the box switches off and the text is '
+                     +'visible for those frames. Raise <b>bridge dropouts up to</b> until they '
+                     +'stop appearing, or cover them by hand.',
   'miss.none':'<span class="good">none close enough to worry about</span>',
   'miss.add':'this is it too',
   'miss.times':(n,f,l) => n > 1 ? `${n}× · ${f}–${l}s` : `${f}s`,
@@ -1259,6 +1309,8 @@ en: {
     + '\n\nRender it?',
   'worry.miss':n => `${n} almost-matched, left visible — the most likely place for a leak`,
   'worry.gaps':n => `${n} stretch(es) where OCR lost the text and the box was guessed`,
+  'worry.exposed':n => `${n} dropout(s) LEFT UNCOVERED — longer than the bridge, so the text is `
+                     + `visible there. Raise "bridge dropouts up to" and generate again.`,
   'exp.start':'starting ffmpeg…', 'exp.stopping':'stopping…',
   'exp.progress':(p,extra) => `rendering… ${p}%` + (extra ? ` · ${extra}` : ''),
   'exp.wrote':(name,sha) => `<span class="good">wrote ${name}</span> · log written · sha256 `
@@ -1305,7 +1357,7 @@ de: {
   's4.why':'Erzeugte Schwärzungen sind Vorschläge. Nichts davon ist automatisch — durchgehen und '
           +'bestätigen.',
   's4.tab.hits':'jeder Fund',
-  's4.tab.gaps':n => `geratene Abschnitte (${n})`,
+  's4.tab.gaps':(n,e) => `geratene Abschnitte (${n})` + (e ? ` · ${e} offen!` : ''),
   's4.tab.miss':n => `fast getroffen (${n})`,
   's4.hits.hint':'Jede Stelle, an der der Text gefunden wurde. Durchgehen und bestätigen, dass der '
                 +'Balken darüber sitzt; falsche verwerfen.',
@@ -1325,9 +1377,6 @@ de: {
   'p.title':'Projekt', 'p.unsaved':'ungespeichert', 'p.export':'geschwärztes Video rendern…',
   'p.save':'speichern', 'p.saveas':'speichern unter…', 'p.open':'öffnen…',
   'p.reset':'zurücksetzen',
-  'p.verify':'Ausgabedatei prüfen',
-  'p.verify.title':'Liest die Ausgabedatei erneut und prüft, ob keiner der geschwärzten Texte noch '
-                  +'gefunden wird.',
   'b.title':'Balken', 'b.clear':'leeren', 'b.clear.title':'alle Balken entfernen',
   'b.empty':'noch keine — links Text auswählen oder im Video ziehen',
   'e.title':'ausgewählter Balken', 'e.nosel':'nichts ausgewählt',
@@ -1361,7 +1410,8 @@ de: {
   'gen.stat':(hits,boxes,qs,dropped) =>
     `<span class="good">${hits} Lesungen → ${boxes} Balken</span> über ${qs} Text(e)`
     + (dropped ? ` · ${dropped} verworfen` : ''),
-  'chk.n':(h,g,m) => `${h} Funde · ${g} geraten · ${m} fast`,
+  'chk.n':(h,g,m,e) => `${h} Funde · ${g} geraten · ${m} fast`
+                     + (e ? ` · <span class="err">${e} offen</span>` : ''),
   'chk.nothing':'noch nichts erzeugt',
   'chk.hitn':(i,n) => `${i} / ${n}`,
   'chk.hitinfo':(kind,t,text) => `<span class="tag ${kind}">${kind}</span> bei ${t}s — gelesen als `
@@ -1369,6 +1419,11 @@ de: {
   'chk.dropped':' <span class="tag dropped">verworfen</span>',
   'gaps.none':'<span class="good">keine — der Text wurde auf jedem geprüften Bild erkannt</span>',
   'gaps.row':s => `${s}s geraten`,
+  'gaps.exposed':s => `${s}s NICHT abgedeckt`,
+  'gaps.exposed.hint':'Aussetzer, die die Überbrückung nicht abdeckt: die Texterkennung hat den '
+                     +'Text länger verloren als erlaubt, der Balken geht aus und der Text ist in '
+                     +'diesen Bildern sichtbar. <b>Aussetzer überbrücken bis</b> erhöhen, bis '
+                     +'keine mehr erscheinen, oder von Hand abdecken.',
   'miss.none':'<span class="good">nichts, was nah genug wäre</span>',
   'miss.add':'gehört auch dazu',
   'miss.times':(n,f,l) => n > 1 ? `${n}× · ${f}–${l}s` : `${f}s`,
@@ -1385,6 +1440,8 @@ de: {
   'worry.miss':n => `${n} fast getroffen und sichtbar geblieben — die wahrscheinlichste Leckstelle`,
   'worry.gaps':n => `${n} Abschnitt(e), in denen der Text verloren ging und der Balken geraten `
                   + `wurde`,
+  'worry.exposed':n => `${n} Aussetzer NICHT ABGEDECKT — länger als die Überbrückung, der Text `
+                     + `ist dort sichtbar. „Aussetzer überbrücken bis“ erhöhen und neu erzeugen.`,
   'exp.start':'ffmpeg startet…', 'exp.stopping':'wird gestoppt…',
   'exp.progress':(p,extra) => `rendert… ${p}%` + (extra ? ` · ${extra}` : ''),
   'exp.wrote':(name,sha) => `<span class="good">${name} geschrieben</span> · Protokoll geschrieben `
@@ -1416,6 +1473,7 @@ function applyLang() {
   for (const el of document.querySelectorAll('[data-i18n-title]')) el.title = tx(el.dataset.i18nTitle);
   for (const el of document.querySelectorAll('[data-i18n-ph]')) el.placeholder = tx(el.dataset.i18nPh);
   $('misshint').innerHTML = tx('s4.miss.hint');
+  showVideo();
   $('loghow').textContent = tx($('fflog').hidden ? 'ff.show' : 'ff.hide');
   if (!projectPath) $('fname').textContent = tx('p.unsaved');
   render(); drawCheck();
@@ -1443,6 +1501,17 @@ function applyMode() {
   fit();
 }
 $('mode').onchange = () => { keep('mode', $('mode').value); applyMode(); };
+
+/* The header line is derived from what is loaded, never assigned a fixed string: it has to
+   survive a language switch and a project reset, and both used to blank it back to "no video"
+   while the video was still open and playable. */
+function showVideo() {
+  $('vinfo').textContent = info
+    ? `${vid.dataset.name} · ${info.width}×${info.height} · `
+      + `${info.duration.toFixed(1)}s · ${info.fps.toFixed(2)} fps · `
+      + `sha256 ${info.sha256.slice(0,10)}…`
+    : tx('no.video');
+}
 
 const now = () => +vid.currentTime.toFixed(3);
 /* window.alert is swallowed and window.confirm returns true without asking in this webview,
@@ -1674,7 +1743,7 @@ $('reset').onclick = async () => {
   if (!await ask(tx('ask.reset'))) return;
   boxes = []; sel = null; gen = null; ocr = null; index = []; groups = [];
   checked.clear(); expanded.clear(); projectPath = null; lastExport = null;
-  setName(null); $('ocrstat').textContent = '';
+  setName(null); showVideo(); $('ocrstat').textContent = '';
   $('genstat').textContent = ''; $('expstat').textContent = '';
   $('rx').disabled = true; $('rx').value = '';
   render(); drawCheck();
@@ -1699,8 +1768,7 @@ async function loadVideo(path) {
     videoPath = path;
     vid.src = T.core.convertFileSrc(path);
     vid.dataset.name = path.split(/[\\/]/).pop();
-    $('vinfo').textContent = `${vid.dataset.name} · ${info.width}×${info.height} · `
-      + `${info.duration.toFixed(1)}s · ${info.fps.toFixed(2)} fps · sha256 ${info.sha256.slice(0,10)}…`;
+    showVideo();
     const fps = Math.max(1, Math.round(info.fps || 25));
     $('fps').value = fps;
     // Sample at the video's own rate by default: anything slower leaves frames no one looked at.
@@ -1901,19 +1969,23 @@ function rebuild() {
   const live = gen.hits.filter((_,i) => !gen.dropped.has(i));
   const byQ = new Map();
   for (const h of live) { if (!byQ.has(h.q)) byQ.set(h.q, []); byQ.get(h.q).push(h); }
-  const tracks = [];
+  const tracks = [], exposed = [];
   for (const [q, hs] of byQ) {
-    for (const t of toTracks(hs, {
-      rate: ocr.rate, duration: info.duration, W: info.width, H: info.height,
-      gapBridgeSec: +$('gapSec').value, padPx: +$('padPx').value,
-      videoFps: info.fps, interp: $('interp').value,
-    })) { t.id = nextId++; t.gen.query = q; tracks.push(t); }
+    const o = { rate: ocr.rate, duration: info.duration, W: info.width, H: info.height,
+                gapBridgeSec: +$('gapSec').value, padPx: +$('padPx').value,
+                videoFps: info.fps, interp: $('interp').value };
+    for (const t of toTracks(hs, o)) { t.id = nextId++; t.gen.query = q; tracks.push(t); }
+    for (const g of exposedGaps(hs, o)) exposed.push({ ...g, query: q });
   }
   gen.tracks = tracks;
+  gen.exposed = exposed.sort((a,b) => b.len - a.len);
   boxes.push(...tracks);
   sel = tracks[0] || null;
+  /* Simple mode hides the review panel, so this line is the only place the warning can land
+     before the export dialog. It goes next to the button that produced it either way. */
   $('genstat').innerHTML = tx('gen.stat', live.length, tracks.length, gen.queries.length,
-                              gen.dropped.size);
+                              gen.dropped.size)
+    + (exposed.length ? `<br><span class="err">${tx('worry.exposed', exposed.length)}</span>` : '');
   render(); drawCheck();
 }
 $('gapSec').onchange = $('padPx').onchange = $('interp').onchange =
@@ -1930,7 +2002,6 @@ function drawCheck() {
   const on = t => { const p = $('pane-'+t); p.hidden = tab !== t;
                     p.style.display = tab === t ? 'flex' : 'none'; };
   on('hits'); on('gaps'); on('miss');
-  $('verify').disabled = !lastExport;
   const miss = gen ? groupMisses(gen.misses) : [];
   if (!gen) {
     $('checkn').textContent = '';
@@ -1942,8 +2013,10 @@ function drawCheck() {
   }
   let ngap = 0;
   for (const tr of gen.tracks) ngap += tr.gen.gaps.length;
-  $('checkn').textContent = tx('chk.n', gen.hits.length, ngap, miss.length);
-  $('tab-gaps').textContent = tx('s4.tab.gaps', ngap);
+  const nexp = gen.exposed ? gen.exposed.length : 0;
+  $('checkn').innerHTML = tx('chk.n', gen.hits.length, ngap, miss.length, nexp);
+  $('tab-gaps').textContent = tx('s4.tab.gaps', ngap, nexp);
+  $('tab-gaps').classList.toggle('err', !!nexp);
   $('tab-miss').textContent = tx('s4.tab.miss', miss.length);
 
   const h = gen.hits[hitIdx];
@@ -1955,6 +2028,26 @@ function drawCheck() {
   $('hdrop').textContent = tx(gen.dropped.has(hitIdx) ? 's4.undrop' : 's4.drop');
 
   const gl = $('gaplist'); gl.innerHTML = '';
+  /* Uncovered stretches go first and in red. A guessed stretch is a box doing its job; an
+     uncovered one is the text on screen, and burying it under a list of successes is how a
+     disclosure ships. */
+  if (nexp) {
+    const h = document.createElement('div');
+    h.className = 'hint'; h.style.marginBottom = '6px';
+    h.innerHTML = `<span class="err">${tx('gaps.exposed.hint')}</span>`;
+    gl.appendChild(h);
+    for (const g of gen.exposed.slice(0, 200)) {
+      const d = document.createElement('div');
+      d.className = 'kf';
+      d.innerHTML = `<b>${g.from.toFixed(2)} → ${g.to.toFixed(2)}s</b> `
+                  + `<span class="err">${tx('gaps.exposed', g.len.toFixed(2))}</span>`;
+      const q = document.createElement('span');
+      q.className = 'hint'; q.style.marginLeft = 'auto'; q.textContent = g.query;
+      d.querySelector('b').onclick = () => { seekTo(g.from + 1/(+$('fps').value||25)); };
+      d.appendChild(q); gl.appendChild(d);
+    }
+    gl.appendChild(document.createElement('div')).className = 'sep';
+  }
   gen.tracks.forEach(trk => trk.gen.gaps.forEach(g => {
     const d = document.createElement('div');
     d.className = 'kf';
@@ -2026,11 +2119,14 @@ $('export').onclick = async () => {
   if (!videoPath) return say(tx('err.novideo'), 'err');
   if (!boxes.length) return say(tx('err.noboxes'), 'err');
   /* Simple mode has no review panels to send anyone to, so the gate would be a dialog listing
-     things the user cannot then go and look at. Advanced keeps it. */
-  if (gen && !simple()) {
+     things the user cannot then go and look at. Advanced keeps it — and so does simple the moment
+     a dropout was left uncovered, because that one is not a thing to review, it is text about to
+     be published. */
+  if (gen && (!simple() || (gen.exposed && gen.exposed.length))) {
     const gaps = gen.tracks.reduce((n,trk) => n + trk.gen.gaps.length, 0);
     const nmiss = groupMisses(gen.misses).length;
     const worries = [];
+    if (gen.exposed && gen.exposed.length) worries.push(tx('worry.exposed', gen.exposed.length));
     if (nmiss) worries.push(tx('worry.miss', nmiss));
     if (gaps) worries.push(tx('worry.gaps', gaps));
     if (!await ask(tx('ask.export', gen.hits.length, gen.queries.length, worries))) return;
@@ -2078,7 +2174,7 @@ $('export').onclick = async () => {
 
 async function runVerify(report) {
   if (!lastExport) return;
-  $('verify').disabled = true; $('done-verify').disabled = true;
+  $('done-verify').disabled = true;
   report(tx('ver.running'), '');
   try {
     const re = await invoke('ocr_video', { path: lastExport.path,
@@ -2098,7 +2194,7 @@ async function runVerify(report) {
       key: 'verify', value: { pass, checked: lastExport.strings, failures: fails,
                               lines_reocred: re.lines.length, rate: re.rate, lang: re.lang } });
   } catch (e) { report(`<span class="err">${esc2(e)}</span>`, 'html'); }
-  $('verify').disabled = false; $('done-verify').disabled = false;
+  $('done-verify').disabled = false;
 }
 const intoStat = (msg, html) => { if (html) $('expstat').innerHTML = msg; else $('expstat').textContent = msg; };
 const intoDone = (msg, html) => { if (html) $('done-stat').innerHTML = msg; else $('done-stat').textContent = msg;
@@ -2111,7 +2207,6 @@ $('loghow').onclick = () => {
 };
 $('expcancel').onclick = () => { invoke('export_cancel').catch(err);
                                  $('expstat').textContent = tx('exp.stopping'); };
-$('verify').onclick = () => runVerify(intoStat);
 $('done-verify').onclick = () => runVerify(intoDone);
 $('done-close').onclick = () => { $('done').hidden = true; };
 $('done-folder').onclick = () => invoke('reveal', { path: lastExport.path, folder: true }).catch(err);

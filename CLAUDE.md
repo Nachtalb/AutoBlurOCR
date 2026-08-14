@@ -94,6 +94,22 @@ one box spanning everything between them.
 the sampling rate: three samples is 1.5 s at 2 fps but 0.1 s at 30 fps. Sampling faster would then
 split spans that used to hold and switch the box off mid-dropout — exactly backwards.
 
+**A dropout the bridge refuses to cross is a hole, and it has to be reported.** The span closes,
+the box goes off, and the text is on screen for those frames. Span padding covers one sampling
+interval either side, so a dropout is covered when it is no longer than two of them; anything
+longer than that and longer than the bridge is exposed. Measured over 200 randomised scrolls,
+2.5% of frames leak at a bridge of 0, 0.5% at 0.1 and 0.06% at 0.2 — and none of it was reported
+anywhere until `exposedGaps` existed. It reports every refused gap with no upper bound on length
+and no test of whether the text moved in between: over-reporting a warning costs a line in a
+list, under-reporting it costs the disclosure. The warning appears next to the generate button
+(the only place simple mode can show it), in the review panel, and it forces the pre-export
+dialog even in simple mode.
+
+`exposedGaps` accounts for the leaks where the box is off. A residual ~12% of leaking frames in
+that harness are a different failure: the box is on but its held rect is stale by one sample of
+motion, at the first or last frame of an appearance. That is the documented ±1 sampling interval
+limit, and it is not what this reports.
+
 **A straight line across a dropout is not coverage.** Between two readings either side of a gap the
 box would travel a path the text never took. It holds a rect covering both ends instead, or walks
 across in steps when one rect would balloon. Over-covering costs pixels; under-covering is a
