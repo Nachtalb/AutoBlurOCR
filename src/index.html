@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <meta charset="utf-8">
-<title>AutoBlur — OCR redaction</title>
+<title>Redakt — OCR redaction</title>
 <style>
   /* Dark is the default; `.light` is set on <html> from the setting, which itself defaults to
      following the OS. Everything below reads variables, so a theme is one class flip. */
@@ -135,7 +135,7 @@
 </style>
 
 <header>
-  <h1>AUTOBLUR</h1>
+  <h1>REDAKT</h1>
   <span class="hint" id="ver"></span>
   <button id="pick" class="pri" data-i18n="open.video">open video…</button>
   <span class="hint" id="vinfo">no video</span>
@@ -2153,7 +2153,7 @@ $('export').onclick = async () => {
     const rep = await invoke('export', {
       path: videoPath, filtergraph: graph(boxes), out,
       meta: {
-        tool: 'AutoBlur', ocr_engine: ocr ? ocr.engine : null, lang: ocr ? ocr.lang : null,
+        tool: 'Redakt', ocr_engine: ocr ? ocr.engine : null, lang: ocr ? ocr.lang : null,
         rate: ocr ? ocr.rate : null, ocr_scale: ocr ? ocr.ocr_scale : null,
         redacted_strings: gen ? gen.queries : [],
         bridge_seconds: +$('gapSec').value, margin_px: +$('padPx').value,
@@ -2314,7 +2314,7 @@ applyTheme(); applyMode(); applyLang();
    It is in every redaction-log.json already; the titlebar is where a human looks. */
 if (IS_TAURI) T.app.getVersion().then(v => {
   $('ver').textContent = 'v' + v;
-  return T.window.getCurrentWindow().setTitle(`AutoBlur ${v} — OCR redaction`);
+  return T.window.getCurrentWindow().setTitle(`Redakt ${v} — OCR redaction`);
 }).catch(() => {});
 
 render(); drawCheck();

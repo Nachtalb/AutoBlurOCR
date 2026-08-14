@@ -4,9 +4,9 @@
 //!   cargo test --no-default-features          # core only, no webview stack
 //!   cargo test --no-default-features -- --nocapture --ignored   # + the OCR round trip
 //!
-//! Sidecars: put ffmpeg/ffprobe in src-tauri/binaries/, or set AUTOBLUR_FFMPEG / AUTOBLUR_FFPROBE.
+//! Sidecars: put ffmpeg/ffprobe in src-tauri/binaries/, or set REDAKT_FFMPEG / REDAKT_FFPROBE.
 
-use autoblur::*;
+use redakt::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::AtomicBool as AB;
@@ -98,7 +98,7 @@ fn fixture_two() -> PathBuf {
 
 fn run(args: &[&str]) {
     let o = Command::new(tool("ffmpeg")).current_dir(tmp()).args(args).output().unwrap_or_else(|e| {
-        panic!("cannot run {}: {e}. Put sidecars in src-tauri/binaries/ or set AUTOBLUR_FFMPEG.",
+        panic!("cannot run {}: {e}. Put sidecars in src-tauri/binaries/ or set REDAKT_FFMPEG.",
                tool("ffmpeg").display())
     });
     assert!(o.status.success(), "ffmpeg {args:?}\n{}", String::from_utf8_lossy(&o.stderr));
@@ -265,7 +265,7 @@ mod win {
     /// A missing OS feature is not a broken build — but it must be loud, never silent, or the
     /// decisive round-trip test quietly stops covering anything.
     pub fn have_ocr() -> bool {
-        match autoblur::ocr::languages() {
+        match redakt::ocr::languages() {
             Ok(l) if !l.is_empty() => true,
             _ => {
                 eprintln!("SKIPPED: no Windows OCR recognizer installed, OCR tests did not run. \
@@ -278,7 +278,7 @@ mod win {
 
     fn ocr(path: &Path) -> OcrResult {
         let c = AtomicBool::new(false);
-        autoblur::ocr_video(path, &OcrOpts { rate: RATE, lang: "en-US".into() }, &|_, _| {}, &c)
+        redakt::ocr_video(path, &OcrOpts { rate: RATE, lang: "en-US".into() }, &|_, _| {}, &c)
             .expect("OCR failed — is an English OCR language pack installed?")
     }
 
@@ -288,8 +288,8 @@ mod win {
 
     #[test]
     fn languages_are_listed() {
-        let l = autoblur::ocr::languages().unwrap_or_default();
-        println!("recognizers: {l:?}   max image dimension: {}", autoblur::ocr::max_dim());
+        let l = redakt::ocr::languages().unwrap_or_default();
+        println!("recognizers: {l:?}   max image dimension: {}", redakt::ocr::max_dim());
         if !have_ocr() { return; }
         assert!(l.iter().all(|s| s.contains('-')), "expected BCP-47 tags, got {l:?}");
     }
@@ -398,7 +398,7 @@ mod moving {
         if !super::win::have_ocr() { return; }
         let inp = fixture_moving();
         let c = AtomicBool::new(false);
-        let r = autoblur::ocr_video(
+        let r = redakt::ocr_video(
             &inp, &OcrOpts { rate: 30.0, lang: "en-US".into() }, &|_, _| {}, &c).unwrap();
         let hits = r.lines.iter()
             .filter(|l| l.text.to_lowercase().replace(' ', "").contains("hauptstrasse"))
@@ -422,7 +422,7 @@ mod moving {
             Ok(_) => {}
         }
 
-        let after = autoblur::ocr_video(
+        let after = redakt::ocr_video(
             &out, &OcrOpts { rate: 30.0, lang: "en-US".into() }, &|_, _| {}, &c).unwrap();
         let left: Vec<_> = after.lines.iter()
             .filter(|l| l.text.to_lowercase().replace(' ', "").contains("hauptstrasse"))

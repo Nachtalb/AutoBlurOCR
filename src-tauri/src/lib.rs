@@ -1,4 +1,4 @@
-//! AutoBlur core. No Tauri types in any signature here, so `cargo test` drives it headlessly.
+//! Redakt core. No Tauri types in any signature here, so `cargo test` drives it headlessly.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -48,11 +48,11 @@ macro_rules! bail {
 /// Bundled sidecar, never `PATH`: a forensic workstation's `PATH` is not ours to assume and
 /// version drift changes filter behaviour.
 ///
-/// Order: `AUTOBLUR_FFMPEG` / `AUTOBLUR_FFPROBE` override (tests) → next to the executable
+/// Order: `REDAKT_FFMPEG` / `REDAKT_FFPROBE` override (tests) → next to the executable
 /// (how Tauri bundles `externalBin`) → `src-tauri/binaries/<name>-<triple>` (dev + `cargo test`).
 pub fn tool(name: &str) -> PathBuf {
     let suffix = if cfg!(windows) { ".exe" } else { "" };
-    if let Ok(p) = std::env::var(format!("AUTOBLUR_{}", name.to_uppercase())) {
+    if let Ok(p) = std::env::var(format!("REDAKT_{}", name.to_uppercase())) {
         return PathBuf::from(p);
     }
     if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
@@ -440,7 +440,7 @@ pub fn export(
     // would delete it while the other's ffmpeg is still reading it.
     static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let script = std::env::temp_dir().join(format!(
-        "autoblur-boxes-{}-{}.txt",
+        "redakt-boxes-{}-{}.txt",
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
     ));
@@ -654,7 +654,7 @@ fn ocr_pool() -> &'static rayon::ThreadPool {
     POOL.get_or_init(|| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(num_cpus::get().saturating_sub(1).max(1))
-            .thread_name(|i| format!("autoblur-ocr-{i}"))
+            .thread_name(|i| format!("redakt-ocr-{i}"))
             .build()
             .expect("rayon pool")
     })
@@ -695,7 +695,7 @@ pub fn recents_path() -> PathBuf {
         .ok()
         .and_then(|e| e.parent().map(Path::to_path_buf))
         .unwrap_or_else(std::env::temp_dir)
-        .join("autoblur-recents.json")
+        .join("redakt-recents.json")
 }
 
 pub fn recents() -> Vec<String> {

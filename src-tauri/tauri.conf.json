@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AutoBlur",
-  "version": "0.6.2",
-  "identifier": "app.autoblur.redact",
+  "productName": "Redakt",
+  "version": "0.7.0",
+  "identifier": "io.nachtalb.redakt",
   "build": {
     "frontendDist": "../src"
   },
@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "AutoBlur — OCR redaction",
+        "title": "Redakt — OCR redaction",
         "width": 1680,
         "height": 980,
         "minWidth": 1100,

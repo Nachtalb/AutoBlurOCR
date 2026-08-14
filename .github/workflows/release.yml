@@ -146,7 +146,7 @@ jobs:
             Offline OCR-driven text redaction for video. Windows 11, no network.
 
             The installer bundles ffmpeg and ffprobe; nothing is resolved from `PATH`.
-            Installs per-user to `%LOCALAPPDATA%\AutoBlur`, so there is no admin prompt.
+            Installs per-user to `%LOCALAPPDATA%\Redakt`, so there is no admin prompt.
 
             Needs a Windows OCR language pack: *Settings → Time & language → Language →*
             (your language) *→ Language options → Optional features → Optical character

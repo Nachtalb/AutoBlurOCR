@@ -1,16 +1,16 @@
 [package]
-name = "autoblur"
-version = "0.6.2"
+name = "redakt"
+version = "0.7.0"
 edition = "2021"
 description = "Offline OCR-driven text redaction for video"
 rust-version = "1.77"
 
 [lib]
-name = "autoblur"
+name = "redakt"
 path = "src/lib.rs"
 
 [[bin]]
-name = "autoblur"
+name = "redakt"
 path = "src/main.rs"
 required-features = ["app"]
 

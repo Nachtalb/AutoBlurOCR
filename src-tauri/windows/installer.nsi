@@ -258,7 +258,7 @@ Function PageReinstall
     Abort
   ${EndIf}
 
-  ; --- AutoBlur patch ---------------------------------------------------------
+  ; --- Redakt patch ---------------------------------------------------------
   ; An upgrade writes new files over old ones; nothing needs removing first. The stock
   ; template still shows a page whose preselected option is "uninstall before installing",
   ; so the ordinary way to update ends up being uninstall-then-reinstall. Skip the page when
@@ -268,7 +268,7 @@ Function PageReinstall
   ${If} $R0 = 1
     Abort
   ${EndIf}
-  ; --- end AutoBlur patch -----------------------------------------------------
+  ; --- end Redakt patch -----------------------------------------------------
 
   ; Skip showing the page if passive
   ;
@@ -647,7 +647,7 @@ Section WebView2
   ${EndIf}
 SectionEnd
 
-; --- AutoBlur patch ---------------------------------------------------------
+; --- Redakt patch ---------------------------------------------------------
 ; The app is checked for and closed before anything is written, but the bundled ffmpeg and
 ; ffprobe are separate processes and nothing looks for them. One left running — an export still
 ; encoding when the window was closed, say — makes the install stop on "error opening file for
@@ -657,7 +657,7 @@ SectionEnd
 ; will not let a running image be deleted, but it will let it be RENAMED — the open handle
 ; follows the file. So move it aside, write the new one over the now-free name, and sweep the
 ; leftover up on the next install, once whatever held it has exited.
-!macro AutoBlurFreeFile _NAME
+!macro RedaktFreeFile _NAME
   Delete "$INSTDIR\${_NAME}.old"
   ${If} ${FileExists} "$INSTDIR\${_NAME}"
     ClearErrors
@@ -667,7 +667,7 @@ SectionEnd
     ${EndIf}
   ${EndIf}
 !macroend
-; --- end AutoBlur patch -----------------------------------------------------
+; --- end Redakt patch -----------------------------------------------------
 
 Section Install
   SetOutPath $INSTDIR
@@ -678,11 +678,11 @@ Section Install
 
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
 
-  ; --- AutoBlur patch: free any sidecar still held by a stray process ---
+  ; --- Redakt patch: free any sidecar still held by a stray process ---
   {{#each binaries}}
-    !insertmacro AutoBlurFreeFile "{{this}}"
+    !insertmacro RedaktFreeFile "{{this}}"
   {{/each}}
-  ; --- end AutoBlur patch ---
+  ; --- end Redakt patch ---
 
   ; Copy main executable
   File "${MAINBINARYSRCPATH}"
@@ -830,9 +830,9 @@ Section Uninstall
     Delete "$INSTDIR\\{{this.[1]}}"
   {{/each}}
 
-  ; --- AutoBlur patch: sidecars moved aside by an interrupted update ---
+  ; --- Redakt patch: sidecars moved aside by an interrupted update ---
   Delete "$INSTDIR\*.old"
-  ; --- end AutoBlur patch ---
+  ; --- end Redakt patch ---
 
   ; Delete external binaries
   {{#each binaries}}

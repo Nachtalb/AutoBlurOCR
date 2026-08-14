@@ -1,4 +1,4 @@
-# Working on AutoBlur
+# Working on Redakt
 
 Implements `SPEC.md`. The original browser editor is preserved in `legacy/` — its box model,
 interpolation, span logic and filtergraph emitter were carried over, and only its browser-bound
@@ -38,7 +38,7 @@ cargo tauri build                                                  # installer
 ```
 
 `--no-default-features` drops the `app` feature so the core builds without the webview stack.
-Sidecars resolve from `AUTOBLUR_FFMPEG` / `AUTOBLUR_FFPROBE`, then next to the executable, then
+Sidecars resolve from `REDAKT_FFMPEG` / `REDAKT_FFPROBE`, then next to the executable, then
 `src-tauri/binaries/<name>-<triple>.exe` — never from `PATH`, because a forensic workstation's
 `PATH` is not ours to assume and version drift changes filter behaviour.
 
@@ -149,7 +149,7 @@ review gate that silently always said yes.
 ## The vendored NSIS installer template
 
 `src-tauri/windows/installer.nsi` is Tauri's own template with two changes, each marked
-`AutoBlur patch`.
+`Redakt patch`.
 
 The second frees a sidecar that some stray process still holds. The template checks for and
 closes the app, but ffmpeg and ffprobe are separate processes and nothing looks for them, so one

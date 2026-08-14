@@ -1,6 +1,6 @@
-# AutoBlur
+# Redakt
 
-Find text in a video and hide it. Runs entirely on your machine — no cloud, no network, no GPU.
+Find text in a video and black it out. Runs entirely on your machine — no cloud, no network, no GPU.
 
 Point it at a video, let it read the text, tick what should not be visible, check the result, and
 render a redacted copy. Every export writes a log recording exactly what was done, and a one-click
@@ -10,10 +10,14 @@ check re-reads the finished file to confirm the text is really gone.
 
 ## Install
 
-Grab the latest `AutoBlur_*_x64-setup.exe` from [Releases](../../releases) and run it. It installs
+Grab the latest `Redakt_*_x64-setup.exe` from [Releases](../../releases) and run it. It installs
 for the current user, so there is no admin prompt, and ffmpeg is bundled — nothing else to fetch.
 
 Verify the download against the `.sha256` published beside it.
+
+**Coming from AutoBlur?** Uninstall it once, then install Redakt. The rename changes the install
+path and the uninstall entry, so the two would otherwise sit side by side. Your saved projects are
+plain JSON and carry over untouched; the recent-files list and the interface settings start fresh.
 
 Updating is just running the newer installer — it replaces the existing version in place and
 keeps your settings. Nothing is uninstalled, and there is no update check phoning home: this tool
@@ -25,13 +29,13 @@ The interface is in English and German, follows your Windows light/dark setting,
 visibility and the pre-export review panels.
 
 **One prerequisite:** a Windows OCR language pack. *Settings → Time & language → Language →*
-(your language) *→ Language options → Optional features → Optical character recognition.* AutoBlur
+(your language) *→ Language options → Optional features → Optical character recognition.* Redakt
 lists the packs you actually have installed, so a missing one is obvious before you start.
 
 ## Using it
 
 1. **Open a video.** Geometry, duration and a SHA-256 of the file are recorded up front.
-2. **Read it.** AutoBlur samples the video and runs every frame through Windows' OCR. The rate
+2. **Read it.** Redakt samples the video and runs every frame through Windows' OCR. The rate
    defaults to the video's own frame rate, so no frame goes unchecked.
 3. **Pick what to hide.** Every distinct piece of text found is listed. Near-identical readings of
    the same thing — `Hauptstrasse 14`, `Hauptstrasse 1A` — are grouped into one row, so a single

@@ -3,7 +3,7 @@
 //! Thin Tauri wrapper. All state lives in the frontend's box model; the backend is stateless
 //! apart from the cancel flag.
 
-use autoblur::{Error, ExportReport, OcrOpts, OcrResult, VideoInfo};
+use redakt::{Error, ExportReport, OcrOpts, OcrResult, VideoInfo};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -51,14 +51,14 @@ fn probe(app: AppHandle, path: String) -> R<VideoInfo> {
     // The webview cannot play a raw Windows path; it goes through the asset protocol, whose
     // scope has to be widened to this file before convertFileSrc() will load.
     let _ = app.asset_protocol_scope().allow_file(&p);
-    autoblur::probe(&p)
+    redakt::probe(&p)
 }
 
 #[tauri::command]
 fn ocr_languages() -> R<Vec<String>> {
     #[cfg(windows)]
     {
-        autoblur::ocr::languages()
+        redakt::ocr::languages()
     }
     #[cfg(not(windows))]
     {
@@ -84,7 +84,7 @@ async fn ocr_video(app: AppHandle, path: String, rate: f64, lang: String) -> R<O
         let progress = move |done: usize, total: usize| {
             let _ = a.emit("ocr://progress", json!({ "done": done, "total": total }));
         };
-        autoblur::ocr_video(Path::new(&path), &OcrOpts { rate, lang }, &progress, &CANCEL)
+        redakt::ocr_video(Path::new(&path), &OcrOpts { rate, lang }, &progress, &CANCEL)
     })
     .await
     .map_err(|e| Error(e.to_string()))?
@@ -110,14 +110,14 @@ async fn export(
         let log = move |line: &str| {
             let _ = b.emit("export://log", line);
         };
-        let report = autoblur::export(
+        let report = redakt::export(
             Path::new(&path), &filtergraph, Path::new(&out), &progress, &log, &CANCEL_EXPORT)?;
 
         // §10: the artefact that answers "what exactly did you do to this video"
         let mut log = serde_json::to_value(&report)?;
         log["meta"] = meta;
-        log["written"] = json!(autoblur::now_iso());
-        autoblur::write_text(
+        log["written"] = json!(redakt::now_iso());
+        redakt::write_text(
             Path::new(&format!("{out}.redaction-log.json")),
             &serde_json::to_string_pretty(&log)?,
         )?;
@@ -131,9 +131,9 @@ async fn export(
 #[tauri::command]
 fn append_log(path: String, key: String, value: Value) -> R<()> {
     let p = PathBuf::from(&path);
-    let mut log: Value = serde_json::from_str(&autoblur::read_text(&p)?)?;
+    let mut log: Value = serde_json::from_str(&redakt::read_text(&p)?)?;
     log[key] = value;
-    autoblur::write_text(&p, &serde_json::to_string_pretty(&log)?)
+    redakt::write_text(&p, &serde_json::to_string_pretty(&log)?)
 }
 
 /// Show the file in Explorer, or open it in whatever plays it. Local only — no network, and
@@ -158,33 +158,33 @@ fn reveal(path: String, folder: bool) -> R<()> {
 
 #[tauri::command]
 fn write_text(path: String, text: String) -> R<()> {
-    autoblur::write_text(Path::new(&path), &text)
+    redakt::write_text(Path::new(&path), &text)
 }
 
 #[tauri::command]
 fn read_text(path: String) -> R<String> {
-    autoblur::read_text(Path::new(&path))
+    redakt::read_text(Path::new(&path))
 }
 
 #[tauri::command]
 fn recents() -> Vec<String> {
-    autoblur::recents().into_iter().filter(|p| Path::new(p).is_file()).collect()
+    redakt::recents().into_iter().filter(|p| Path::new(p).is_file()).collect()
 }
 
 #[tauri::command]
 fn push_recent(path: String) {
-    let mut l = autoblur::recents();
+    let mut l = redakt::recents();
     l.retain(|p| p != &path);
     l.insert(0, path);
     l.truncate(8);
-    autoblur::set_recents(&l);
+    redakt::set_recents(&l);
 }
 
 #[tauri::command]
 fn drop_recent(path: String) {
-    let mut l = autoblur::recents();
+    let mut l = redakt::recents();
     l.retain(|p| p != &path);
-    autoblur::set_recents(&l);
+    redakt::set_recents(&l);
 }
 
 fn main() {
@@ -195,5 +195,5 @@ fn main() {
             export, export_cancel, append_log, reveal, write_text, read_text, recents, push_recent, drop_recent
         ])
         .run(tauri::generate_context!())
-        .expect("error while running AutoBlur");
+        .expect("error while running Redakt");
 }

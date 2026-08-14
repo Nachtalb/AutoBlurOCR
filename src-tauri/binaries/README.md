@@ -19,6 +19,6 @@ copy "$b\ffmpeg.exe"  src-tauri\binaries\ffmpeg-x86_64-pc-windows-msvc.exe
 copy "$b\ffprobe.exe" src-tauri\binaries\ffprobe-x86_64-pc-windows-msvc.exe
 ```
 
-`tauri build` copies them next to the installed executable, where `autoblur::tool()` finds them.
+`tauri build` copies them next to the installed executable, where `redakt::tool()` finds them.
 For `cargo test` outside a bundle, `tool()` falls back to this directory, or to the
-`AUTOBLUR_FFMPEG` / `AUTOBLUR_FFPROBE` environment variables.
+`REDAKT_FFMPEG` / `REDAKT_FFPROBE` environment variables.
