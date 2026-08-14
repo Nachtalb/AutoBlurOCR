@@ -18,7 +18,7 @@ tools/gen-boxes.mjs       ocr.json + a string -> boxes.txt, using the app's own 
 The UI is English and German (`L` in the app section; static text carries `data-i18n`,
 `data-i18n-title` or `data-i18n-ph` and is swapped by `applyLang()`, anything built in JS goes
 through `tx()`). It has a simple and an advanced mode — simple sets `:root.simple`, which hides
-every `.adv` element, pins the OCR rate to the video's and the bridge to 0.2 s. Theme is
+every `.adv` element and pins the OCR rate to the video's. Theme is
 `:root.light` over CSS variables, defaulting to the OS setting. All three persist in
 `localStorage`.
 
@@ -94,6 +94,14 @@ one box spanning everything between them.
 the sampling rate: three samples is 1.5 s at 2 fps but 0.1 s at 30 fps. Sampling faster would then
 split spans that used to hold and switch the box off mid-dropout — exactly backwards.
 
+**Nothing may outlive its owner.** `std::process::Child` does not kill on drop, and every `?` in
+the OCR loop drops the `FrameReader` that owns one — a frame read error, a failed recognition, a
+panic. The orphaned ffmpeg then blocks forever writing into a pipe nobody drains and keeps
+`ffmpeg.exe` open until the machine is rebooted, at which point the next installer stops with
+"error opening file for writing" and the only ways out are abort or ignore. `Reaped` kills and
+waits in `Drop`, so no early return has to remember; `a_dropped_frame_reader_leaves_no_ffmpeg_behind`
+fails without it.
+
 **A dropout the bridge refuses to cross is a hole, and it has to be reported.** The span closes,
 the box goes off, and the text is on screen for those frames. Span padding covers one sampling
 interval either side, so a dropout is covered when it is no longer than two of them; anything
@@ -103,7 +111,8 @@ anywhere until `exposedGaps` existed. It reports every refused gap with no upper
 and no test of whether the text moved in between: over-reporting a warning costs a line in a
 list, under-reporting it costs the disclosure. The warning appears next to the generate button
 (the only place simple mode can show it), in the review panel, and it forces the pre-export
-dialog even in simple mode.
+dialog even in simple mode. The bridge itself defaults to 0 and is an advanced setting, so the
+simple-mode wording says where to find it rather than naming a control that is not on screen.
 
 `exposedGaps` accounts for the leaks where the box is off. A residual ~12% of leaking frames in
 that harness are a different failure: the box is on but its held rect is stale by one sample of
@@ -139,8 +148,17 @@ review gate that silently always said yes.
 
 ## The vendored NSIS installer template
 
-`src-tauri/windows/installer.nsi` is Tauri's own template with one block added, marked
-`AutoBlur patch`. Upstream shows a page whenever a previous install is detected and preselects
+`src-tauri/windows/installer.nsi` is Tauri's own template with two changes, each marked
+`AutoBlur patch`.
+
+The second frees a sidecar that some stray process still holds. The template checks for and
+closes the app, but ffmpeg and ffprobe are separate processes and nothing looks for them, so one
+survivor stopped the install dead. Killing them by name would take out the user's own ffmpeg;
+instead each sidecar is renamed aside — Windows refuses to delete a running image but will rename
+one, the open handle following the file — the new copy is written over the freed name, and the
+`.old` leftover is swept up by the next install or the uninstaller.
+
+The first: Upstream shows a page whenever a previous install is detected and preselects
 "uninstall before installing", so the ordinary way to update is uninstall-then-reinstall. An
 upgrade writes new files over old ones and needs no removal, so the patch skips that page when
 the incoming version is newer. Same-version runs keep their Add/Reinstall vs Uninstall choice,

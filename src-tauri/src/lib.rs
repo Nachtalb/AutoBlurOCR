@@ -66,6 +66,30 @@ pub fn tool(name: &str) -> PathBuf {
         .join(format!("{name}-{}{suffix}", env!("TARGET_TRIPLE")))
 }
 
+/// A `Child` that is killed and reaped when it goes out of scope.
+///
+/// `std::process::Child` deliberately does NOT kill on drop, and every `?` in the OCR loop drops
+/// the reader that owns one: a frame read error, a failed recognition, a panic. The orphaned
+/// ffmpeg then blocks forever writing into a pipe nobody drains, and keeps `ffmpeg.exe` open
+/// until the machine is rebooted — at which point the next installer cannot overwrite the
+/// sidecar and stops with "error opening file for writing". One guard here beats remembering at
+/// every early return, and the cost of killing an already-dead child is an ignored error.
+struct Reaped(Child);
+
+impl std::ops::Deref for Reaped {
+    type Target = Child;
+    fn deref(&self) -> &Child { &self.0 }
+}
+impl std::ops::DerefMut for Reaped {
+    fn deref_mut(&mut self) -> &mut Child { &mut self.0 }
+}
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();   // without this the handle leaks and Windows keeps the image open
+    }
+}
+
 fn spawn(path: &Path, args: &[&str]) -> Result<Child> {
     spawn_with(path, args, Stdio::piped())
 }
@@ -180,7 +204,7 @@ pub fn probe(path: &Path) -> Result<VideoInfo> {
 /// Raw BGRA frames piped out of ffmpeg. Frame `i` is source time `i / rate` exactly (§4).
 /// The rawvideo stream carries no header, so the caller supplies the geometry from `probe`.
 pub struct FrameReader {
-    child: Child,
+    child: Reaped,
     out: BufReader<std::process::ChildStdout>,
     pub width: u32,
     pub height: u32,
@@ -196,7 +220,12 @@ impl FrameReader {
               "-pix_fmt", "bgra", "-f", "rawvideo", "-"],
         )?;
         let out = BufReader::with_capacity(1 << 20, child.stdout.take().unwrap());
-        Ok(FrameReader { child, out, width, height, frame: 0 })
+        Ok(FrameReader { child: Reaped(child), out, width, height, frame: 0 })
+    }
+
+    /// The ffmpeg process behind this reader — so a test can confirm it is gone afterwards.
+    pub fn pid(&self) -> u32 {
+        self.child.id()
     }
 
     pub fn frame_bytes(&self) -> usize {
@@ -352,7 +381,7 @@ fn run_encode(
     log: &dyn Fn(&str),
     cancel: &AtomicBool,
 ) -> Result<(bool, String)> {
-    let mut child = spawn_with(ffmpeg, args, Stdio::null())?;
+    let mut child = Reaped(spawn_with(ffmpeg, args, Stdio::null())?);
     // ffmpeg writes progress to stderr as `time=HH:MM:SS.ss`, separated by \r not \n
     let mut tail = String::new();
     if let Some(stderr) = child.stderr.take() {

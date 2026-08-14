@@ -647,6 +647,28 @@ Section WebView2
   ${EndIf}
 SectionEnd
 
+; --- AutoBlur patch ---------------------------------------------------------
+; The app is checked for and closed before anything is written, but the bundled ffmpeg and
+; ffprobe are separate processes and nothing looks for them. One left running — an export still
+; encoding when the window was closed, say — makes the install stop on "error opening file for
+; writing", and the only ways out are abort or ignore, and ignore silently keeps the old sidecar.
+;
+; Killing them by name is not an option: plenty of people have their own ffmpeg running. Windows
+; will not let a running image be deleted, but it will let it be RENAMED — the open handle
+; follows the file. So move it aside, write the new one over the now-free name, and sweep the
+; leftover up on the next install, once whatever held it has exited.
+!macro AutoBlurFreeFile _NAME
+  Delete "$INSTDIR\${_NAME}.old"
+  ${If} ${FileExists} "$INSTDIR\${_NAME}"
+    ClearErrors
+    Delete "$INSTDIR\${_NAME}"
+    ${If} ${Errors}
+      Rename "$INSTDIR\${_NAME}" "$INSTDIR\${_NAME}.old"
+    ${EndIf}
+  ${EndIf}
+!macroend
+; --- end AutoBlur patch -----------------------------------------------------
+
 Section Install
   SetOutPath $INSTDIR
 
@@ -655,6 +677,12 @@ Section Install
   !endif
 
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+
+  ; --- AutoBlur patch: free any sidecar still held by a stray process ---
+  {{#each binaries}}
+    !insertmacro AutoBlurFreeFile "{{this}}"
+  {{/each}}
+  ; --- end AutoBlur patch ---
 
   ; Copy main executable
   File "${MAINBINARYSRCPATH}"
@@ -801,6 +829,10 @@ Section Uninstall
   {{#each resources}}
     Delete "$INSTDIR\\{{this.[1]}}"
   {{/each}}
+
+  ; --- AutoBlur patch: sidecars moved aside by an interrupted update ---
+  Delete "$INSTDIR\*.old"
+  ; --- end AutoBlur patch ---
 
   ; Delete external binaries
   {{#each binaries}}

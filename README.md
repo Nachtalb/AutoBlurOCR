@@ -21,8 +21,8 @@ never touches the network.
 
 The interface is in English and German, follows your Windows light/dark setting, and starts in a
 **simple** mode that leaves the settings most jobs never touch at their defaults. Switch to
-**advanced** in the top right for the sampling rate, regex filtering, per-range visibility and the
-pre-export review panels.
+**advanced** in the top right for the sampling rate, dropout bridging, regex filtering, per-range
+visibility and the pre-export review panels.
 
 **One prerequisite:** a Windows OCR language pack. *Settings → Time & language → Language →*
 (your language) *→ Language options → Optional features → Optical character recognition.* AutoBlur
@@ -46,11 +46,13 @@ lists the packs you actually have installed, so a missing one is obvious before 
    - **guessed stretches** — where OCR lost the text for a moment and the box was held across the
      gap. Worth watching. Any dropout too long to bridge is listed here first, in red: the box is
      off for those frames and the text is visible. Raise **bridge dropouts up to** until they
-     stop appearing. This one is flagged everywhere, including in simple mode.
+     stop appearing — it is an advanced setting, and it starts at 0. This one is flagged
+     everywhere, including in simple mode.
    - **almost matched** — text that *nearly* matched what you picked and was left visible. This is
      where a leak hides. One row per distinct reading, however many frames it spans. Read it.
 6. **Render.** You get the redacted video, a log beside it, and buttons to open the folder, play
-   the file, or re-read it and confirm the text is gone. **ffmpeg output** shows what the encoder
+   the file, or re-read it and confirm the text is gone. The folder stays one click away in the
+   project panel afterwards. **ffmpeg output** shows what the encoder
    is doing while it works, including its speed, and **stop** ends a render you don't want to wait
    for.
 

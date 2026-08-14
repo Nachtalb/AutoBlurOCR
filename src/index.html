@@ -192,9 +192,9 @@
 
     <div class="panel">
       <h2 data-i18n="s3.title">3 · hide it</h2>
-      <div class="row">
+      <div class="row adv">
         <span class="hint" data-i18n="s3.bridge" data-i18n-title="s3.bridge.title">bridge dropouts up to</span>
-        <input type="number" id="gapSec" value="0.5" min="0" step="0.1" style="width:52px"> s
+        <input type="number" id="gapSec" value="0" min="0" step="0.1" style="width:52px"> s
       </div>
       <div class="row adv">
         <span class="hint" data-i18n="s3.margin" data-i18n-title="s3.margin.title">margin</span>
@@ -295,6 +295,10 @@
         <button id="saveas" data-i18n="p.saveas">save as…</button>
         <button id="open" data-i18n="p.open">open…</button>
         <button id="reset" class="danger" style="margin-left:auto" data-i18n="p.reset">reset</button>
+      </div>
+      <div class="row" id="lastrow" hidden>
+        <button id="showout" style="flex:1"
+          data-i18n="p.showout" data-i18n-title="p.showout.title">open the export folder</button>
       </div>
       <progress id="expprog" value="0" max="1" hidden style="margin-top:6px"></progress>
       <div class="row" id="exprow" hidden style="margin-top:4px">
@@ -1249,6 +1253,8 @@ en: {
                 +'same thing.',
   'p.title':'project', 'p.unsaved':'unsaved', 'p.export':'render redacted video…',
   'p.save':'save', 'p.saveas':'save as…', 'p.open':'open…', 'p.reset':'reset',
+  'p.showout':'open the export folder',
+  'p.showout.title':'Show the last rendered video in Explorer, with its redaction log beside it.',
   'b.title':'boxes', 'b.clear':'clear', 'b.clear.title':'remove every box',
   'b.empty':'none yet — pick text on the left, or drag on the video',
   'e.title':'selected box', 'e.nosel':'nothing selected',
@@ -1309,8 +1315,9 @@ en: {
     + '\n\nRender it?',
   'worry.miss':n => `${n} almost-matched, left visible — the most likely place for a leak`,
   'worry.gaps':n => `${n} stretch(es) where OCR lost the text and the box was guessed`,
-  'worry.exposed':n => `${n} dropout(s) LEFT UNCOVERED — longer than the bridge, so the text is `
-                     + `visible there. Raise "bridge dropouts up to" and generate again.`,
+  'worry.exposed':(n,adv) => `${n} dropout(s) LEFT UNCOVERED — longer than the bridge, so the `
+    + `text is visible there. Raise "bridge dropouts up to" and generate again`
+    + (adv ? '.' : ' — it is under the advanced settings.'),
   'exp.start':'starting ffmpeg…', 'exp.stopping':'stopping…',
   'exp.progress':(p,extra) => `rendering… ${p}%` + (extra ? ` · ${extra}` : ''),
   'exp.wrote':(name,sha) => `<span class="good">wrote ${name}</span> · log written · sha256 `
@@ -1377,6 +1384,8 @@ de: {
   'p.title':'Projekt', 'p.unsaved':'ungespeichert', 'p.export':'geschwärztes Video rendern…',
   'p.save':'speichern', 'p.saveas':'speichern unter…', 'p.open':'öffnen…',
   'p.reset':'zurücksetzen',
+  'p.showout':'Ausgabeordner öffnen',
+  'p.showout.title':'Zeigt das zuletzt gerenderte Video im Explorer, mit dem Protokoll daneben.',
   'b.title':'Balken', 'b.clear':'leeren', 'b.clear.title':'alle Balken entfernen',
   'b.empty':'noch keine — links Text auswählen oder im Video ziehen',
   'e.title':'ausgewählter Balken', 'e.nosel':'nichts ausgewählt',
@@ -1440,8 +1449,9 @@ de: {
   'worry.miss':n => `${n} fast getroffen und sichtbar geblieben — die wahrscheinlichste Leckstelle`,
   'worry.gaps':n => `${n} Abschnitt(e), in denen der Text verloren ging und der Balken geraten `
                   + `wurde`,
-  'worry.exposed':n => `${n} Aussetzer NICHT ABGEDECKT — länger als die Überbrückung, der Text `
-                     + `ist dort sichtbar. „Aussetzer überbrücken bis“ erhöhen und neu erzeugen.`,
+  'worry.exposed':(n,adv) => `${n} Aussetzer NICHT ABGEDECKT — länger als die Überbrückung, der `
+    + `Text ist dort sichtbar. „Aussetzer überbrücken bis“ erhöhen und neu erzeugen`
+    + (adv ? '.' : ' — steht unter den erweiterten Einstellungen.'),
   'exp.start':'ffmpeg startet…', 'exp.stopping':'wird gestoppt…',
   'exp.progress':(p,extra) => `rendert… ${p}%` + (extra ? ` · ${extra}` : ''),
   'exp.wrote':(name,sha) => `<span class="good">${name} geschrieben</span> · Protokoll geschrieben `
@@ -1497,7 +1507,6 @@ sysDark.addEventListener('change', applyTheme);
 const simple = () => $('mode').value === 'simple';
 function applyMode() {
   document.documentElement.classList.toggle('simple', simple());
-  if (simple()) { $('gapSec').value = 0.2; if (gen) rebuild(); }
   fit();
 }
 $('mode').onchange = () => { keep('mode', $('mode').value); applyMode(); };
@@ -1743,6 +1752,7 @@ $('reset').onclick = async () => {
   if (!await ask(tx('ask.reset'))) return;
   boxes = []; sel = null; gen = null; ocr = null; index = []; groups = [];
   checked.clear(); expanded.clear(); projectPath = null; lastExport = null;
+  $('lastrow').hidden = true;
   setName(null); showVideo(); $('ocrstat').textContent = '';
   $('genstat').textContent = ''; $('expstat').textContent = '';
   $('rx').disabled = true; $('rx').value = '';
@@ -1985,7 +1995,8 @@ function rebuild() {
      before the export dialog. It goes next to the button that produced it either way. */
   $('genstat').innerHTML = tx('gen.stat', live.length, tracks.length, gen.queries.length,
                               gen.dropped.size)
-    + (exposed.length ? `<br><span class="err">${tx('worry.exposed', exposed.length)}</span>` : '');
+    + (exposed.length
+       ? `<br><span class="err">${tx('worry.exposed', exposed.length, !simple())}</span>` : '');
   render(); drawCheck();
 }
 $('gapSec').onchange = $('padPx').onchange = $('interp').onchange =
@@ -2126,7 +2137,8 @@ $('export').onclick = async () => {
     const gaps = gen.tracks.reduce((n,trk) => n + trk.gen.gaps.length, 0);
     const nmiss = groupMisses(gen.misses).length;
     const worries = [];
-    if (gen.exposed && gen.exposed.length) worries.push(tx('worry.exposed', gen.exposed.length));
+    if (gen.exposed && gen.exposed.length)
+      worries.push(tx('worry.exposed', gen.exposed.length, !simple()));
     if (nmiss) worries.push(tx('worry.miss', nmiss));
     if (gaps) worries.push(tx('worry.gaps', gaps));
     if (!await ask(tx('ask.export', gen.hits.length, gen.queries.length, worries))) return;
@@ -2153,6 +2165,7 @@ $('export').onclick = async () => {
       },
     });
     lastExport = { path: out, strings: gen ? gen.queries : [] };
+    $('lastrow').hidden = false;
     const name = esc2(out.split(/[\\/]/).pop());
     $('expstat').innerHTML = tx('exp.wrote', name, rep.output_sha256.slice(0,10));
     $('done-path').textContent = out;
@@ -2209,7 +2222,9 @@ $('expcancel').onclick = () => { invoke('export_cancel').catch(err);
                                  $('expstat').textContent = tx('exp.stopping'); };
 $('done-verify').onclick = () => runVerify(intoDone);
 $('done-close').onclick = () => { $('done').hidden = true; };
-$('done-folder').onclick = () => invoke('reveal', { path: lastExport.path, folder: true }).catch(err);
+const showOut = () => invoke('reveal', { path: lastExport.path, folder: true }).catch(err);
+$('done-folder').onclick = showOut;
+$('showout').onclick = showOut;
 $('done-open').onclick = () => invoke('reveal', { path: lastExport.path, folder: false }).catch(err);
 
 /* ---------- project files ---------- */

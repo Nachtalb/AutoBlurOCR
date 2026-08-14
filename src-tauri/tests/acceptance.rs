@@ -150,6 +150,41 @@ fn union_is_the_bounding_box() {
     assert_eq!(union(&[]), [0.0, 0.0, 0.0, 0.0]);
 }
 
+/// Is a pid still a live process? Only used to prove nothing outlived its owner.
+fn alive(pid: u32) -> bool {
+    if cfg!(windows) {
+        let o = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"]).output().unwrap();
+        String::from_utf8_lossy(&o.stdout).contains(&pid.to_string())
+    } else {
+        Command::new("kill").args(["-0", &pid.to_string()]).output().unwrap().status.success()
+    }
+}
+
+/// `std::process::Child` does not kill on drop, and every `?` in the OCR loop drops the reader.
+/// A surviving ffmpeg blocks forever on a pipe nobody drains and keeps `ffmpeg.exe` open until
+/// the machine reboots, which is what made the next installer stop with "error opening file for
+/// writing". Nothing may outlive its owner.
+#[test]
+fn a_dropped_frame_reader_leaves_no_ffmpeg_behind() {
+    let f = fixture();
+    let i = probe(&f).unwrap();
+    let pid = {
+        let mut r = FrameReader::new(&f, "fps=2", i.width, i.height).unwrap();
+        let pid = r.pid();
+        r.next_frame().unwrap().expect("the reader should produce a frame");
+        assert!(alive(pid), "ffmpeg should still be running while the reader is alive");
+        pid // dropped here WITHOUT finish(), exactly as an early `?` would
+    };
+    for _ in 0..50 {
+        if !alive(pid) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    panic!("ffmpeg {pid} outlived its FrameReader; it will hold ffmpeg.exe open until reboot");
+}
+
 #[test]
 fn probe_reports_geometry_and_a_stable_hash() {
     let f = fixture();
@@ -316,7 +351,7 @@ mod win {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let o = Command::new("node")
             .current_dir(root)
-            .args(["tools/gen-boxes.mjs", &oj.to_string_lossy(), TEXT, "pixelate"])
+            .args(["tools/gen-boxes.mjs", &oj.to_string_lossy(), TEXT])
             .output()
             .expect("node is needed for the round trip test");
         assert!(o.status.success(), "gen-boxes: {}", String::from_utf8_lossy(&o.stderr));
