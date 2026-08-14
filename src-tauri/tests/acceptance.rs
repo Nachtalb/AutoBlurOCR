@@ -27,15 +27,30 @@ fn tmp() -> PathBuf {
     d
 }
 
+/// Fixtures are built once and shared by every test, and the tests run in parallel. Without
+/// this, a cold checkout races: two ffmpeg processes write the same file while a third reads a
+/// half-written one and ffprobe reports "moov atom not found". Build under a lock, into a temp
+/// name, then rename — so a reader either sees no file or a complete one.
+fn build_once(out: PathBuf, build: impl FnOnce(&Path)) -> PathBuf {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if !out.is_file() {
+        let part = out.with_extension("part");
+        let _ = std::fs::remove_file(&part);
+        build(&part);
+        std::fs::rename(&part, &out).unwrap();
+    }
+    out
+}
+
 /// ffmpeg's filter parser splits options on `:`, so a Windows drive letter inside a value is
 /// a fight not worth having: the font is copied next to the fixtures and ffmpeg runs from
 /// there, leaving a bare relative filename in the graph.
 fn font() -> &'static str {
-    let dst = tmp().join("font.ttf");
-    if !dst.is_file() {
+    build_once(tmp().join("font.ttf"), |part| {
         let cands: &[&str] = if cfg!(windows) {
             &[r"C:\Windows\Fonts\arial.ttf", r"C:\Windows\Fonts\segoeui.ttf",
-              r"C:\Windows\Fonts\consola.ttf"]
+              r"C:\Windows\Fonts\consola.ttf", r"C:\Windows\Fonts\tahoma.ttf"]
         } else {
             &["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
               "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
@@ -43,34 +58,27 @@ fn font() -> &'static str {
         };
         let f = cands.iter().find(|p| Path::new(p).is_file())
             .unwrap_or_else(|| panic!("no font found, tried {cands:?}"));
-        std::fs::copy(f, &dst).unwrap();
-    }
+        std::fs::copy(f, part).unwrap();
+    });
     "font.ttf"
 }
 
 /// 20 s, white, one black string at a known place, on only between 4 s and 6 s.
 fn fixture() -> PathBuf {
-    let out = tmp().join("fixture.mp4");
-    if out.is_file() {
-        return out;
-    }
     let vf = format!(
         "drawtext=fontfile={}:text='{TEXT}':fontcolor=black:fontsize=48:x={TX}:y={TY}\
          :enable=between(t\\,{T_ON}\\,{T_OFF})",
         font()
     );
-    run(&["-y", "-f", "lavfi", "-i", &format!("color=c=white:s={W}x{H}:d=20:r=25"),
-          "-vf", &vf, "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p",
-          &out.to_string_lossy()]);
-    out
+    build_once(tmp().join("fixture.mp4"), |part| {
+        run(&["-y", "-f", "lavfi", "-i", &format!("color=c=white:s={W}x{H}:d=20:r=25"),
+              "-vf", &vf, "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p",
+              "-f", "mp4", &part.to_string_lossy()]);
+    })
 }
 
 /// Same string in two places in the same frame (§11.5 ground truth, and a second OCR target).
 fn fixture_two() -> PathBuf {
-    let out = tmp().join("fixture-two.mp4");
-    if out.is_file() {
-        return out;
-    }
     let f = font();
     let vf = format!(
         "drawtext=fontfile={f}:text='{TEXT}':fontcolor=black:fontsize=48:x=120:y=120\
@@ -78,10 +86,11 @@ fn fixture_two() -> PathBuf {
          drawtext=fontfile={f}:text='{TEXT}':fontcolor=black:fontsize=48:x=700:y=520\
          :enable=between(t\\,{T_ON}\\,{T_OFF})"
     );
-    run(&["-y", "-f", "lavfi", "-i", &format!("color=c=white:s={W}x{H}:d=20:r=25"),
-          "-vf", &vf, "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p",
-          &out.to_string_lossy()]);
-    out
+    build_once(tmp().join("fixture-two.mp4"), |part| {
+        run(&["-y", "-f", "lavfi", "-i", &format!("color=c=white:s={W}x{H}:d=20:r=25"),
+              "-vf", &vf, "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p",
+              "-f", "mp4", &part.to_string_lossy()]);
+    })
 }
 
 fn run(args: &[&str]) {
@@ -331,10 +340,6 @@ mod moving {
     use super::*;
 
     fn fixture_moving() -> PathBuf {
-        let out = tmp().join("fixture-moving.mp4");
-        if out.is_file() {
-            return out;
-        }
         // Moves the whole time but stays fully inside the frame, and is occluded for 0.4 s in
         // the middle so OCR loses it — the bridged-gap path the box has to survive.
         let vf = format!(
@@ -342,10 +347,11 @@ mod moving {
              drawbox=x=0:y=280:w=1280:h=90:color=white@1:t=fill:enable=between(t\\,5\\,5.4)",
             font()
         );
-        run(&["-y", "-f", "lavfi", "-i", "color=c=white:s=1280x720:d=10:r=30",
-              "-vf", &vf, "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p",
-              &out.to_string_lossy()]);
-        out
+        build_once(tmp().join("fixture-moving.mp4"), |part| {
+            run(&["-y", "-f", "lavfi", "-i", "color=c=white:s=1280x720:d=10:r=30",
+                  "-vf", &vf, "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p",
+                  "-f", "mp4", &part.to_string_lossy()]);
+        })
     }
 
     #[test]
