@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The frontend's own self-test: box model, ffmpeg expression emitter, matching, tracking.
+      # No bundler, no dependencies — it runs the exact code the app runs.
+      - name: frontend self-test
+        run: node tools/jstest.mjs
+
+      # ffmpeg and ffprobe are bundled sidecars, never resolved from PATH (a forensic
+      # workstation's PATH is not ours to assume). CI needs them in the same place.
+      - name: fetch ffmpeg sidecars
+        shell: pwsh
+        run: |
+          $url = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.7z'
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.7z -UseBasicParsing
+          7z x ffmpeg.7z -offmpeg -y | Out-Null
+          $bin = (Get-ChildItem ffmpeg -Recurse -Filter ffmpeg.exe | Select-Object -First 1).DirectoryName
+          New-Item -ItemType Directory -Force src-tauri/binaries | Out-Null
+          Copy-Item "$bin\ffmpeg.exe"  src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe
+          Copy-Item "$bin\ffprobe.exe" src-tauri/binaries/ffprobe-x86_64-pc-windows-msvc.exe
+          & src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe -version | Select-Object -First 1
+
+      # `--no-default-features` drives the core without pulling in the webview stack.
+      # The OCR tests need a Windows recognizer; hosted runners have en-US.
+      - name: core + OCR acceptance tests
+        run: cargo test --no-default-features --manifest-path src-tauri/Cargo.toml -- --include-ignored --nocapture
+
+      - name: build the app
+        run: cargo build --release --manifest-path src-tauri/Cargo.toml

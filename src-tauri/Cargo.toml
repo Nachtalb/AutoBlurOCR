@@ -1,0 +1,50 @@
+[package]
+name = "autoblur"
+version = "0.3.0"
+edition = "2021"
+description = "Offline OCR-driven text redaction for video"
+rust-version = "1.77"
+
+[lib]
+name = "autoblur"
+path = "src/lib.rs"
+
+[[bin]]
+name = "autoblur"
+path = "src/main.rs"
+required-features = ["app"]
+
+[features]
+# `cargo test --no-default-features` drives the core without pulling in the webview stack.
+default = ["app"]
+app = ["dep:tauri", "dep:tauri-plugin-dialog"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+rayon = "1"
+num_cpus = "1"
+tauri = { version = "2", features = ["protocol-asset"], optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Foundation",
+  "Foundation_Collections",
+  "Globalization",
+  "Graphics_Imaging",
+  "Media_Ocr",
+  "Storage_Streams",
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_System_WinRT",
+] }
+
+[profile.release]
+opt-level = 2
+lto = true
+strip = true

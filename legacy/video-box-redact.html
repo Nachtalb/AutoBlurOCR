@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Video Box Redact → ffmpeg</title>
+<style>
+  :root { --bg:#14161a; --panel:#1c1f26; --line:#2c313b; --fg:#e6e8ec; --dim:#8b93a3; --acc:#ffb454; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  header { padding:10px 14px; border-bottom:1px solid var(--line); display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  h1 { font-size:13px; margin:0; font-weight:600; letter-spacing:.04em; }
+  main { display:grid; grid-template-columns:1fr 320px; gap:14px; padding:14px; align-items:start; }
+  #stage { position:relative; line-height:0; background:#000; }
+  video { width:100%; display:block; }
+  canvas { position:absolute; inset:0; width:100%; height:100%; cursor:crosshair; }
+  #seek { flex:1; min-width:120px; accent-color:var(--acc); padding:0; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:10px; }
+  .panel + .panel { margin-top:10px; }
+  h2 { font-size:11px; margin:0 0 8px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
+  button, input, select { background:#252932; color:var(--fg); border:1px solid var(--line);
+                          border-radius:4px; padding:4px 8px; font:inherit; }
+  button { cursor:pointer; }
+  button:hover { border-color:var(--acc); }
+  input[type=number] { width:74px; }
+  .row { display:flex; gap:6px; align-items:center; margin-bottom:6px; flex-wrap:wrap; }
+  .box-item { padding:6px; border:1px solid var(--line); border-radius:4px; margin-bottom:6px; cursor:pointer; }
+  .box-item.sel { border-color:var(--acc); }
+  .kf { display:flex; gap:6px; align-items:center; color:var(--dim); font-size:12px; padding:2px 0; }
+  .kf b { color:var(--fg); font-weight:500; cursor:pointer; }
+  .x { color:#e06c75; cursor:pointer; padding:0 4px; }
+  textarea { width:100%; height:150px; background:#0f1115; color:#9ecbff; border:1px solid var(--line);
+             border-radius:4px; padding:8px; font:12px/1.4 ui-monospace,monospace; resize:vertical; }
+  .hint { color:var(--dim); font-size:12px; }
+</style>
+
+<header>
+  <h1>VIDEO BOX REDACT</h1>
+  <input type="file" id="file" accept="video/*">
+  <span class="hint">drag empty area = new box · drag box = move · corner = resize · every drag writes a keyframe at the playhead</span>
+</header>
+
+<main>
+  <div>
+    <div id="stage"><video id="vid"></video><canvas id="cv"></canvas></div>
+    <div class="panel">
+      <div class="row">
+        <button id="play">▶</button>
+        <input type="range" id="seek" min="0" max="1" step="0.001" value="0">
+      </div>
+      <div class="row">
+        <button id="prev">◀ frame</button><button id="next">frame ▶</button>
+        fps <input type="number" id="fps" value="25" step="1" min="1" style="width:56px">
+        <span class="hint" id="clock">0.00 s</span>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>ffmpeg</h2>
+      <textarea id="out" readonly></textarea>
+      <div class="row" style="margin-top:8px">
+        <button id="dlfilter">download boxes.txt</button>
+        <button id="copycmd">copy -vf one-liner</button>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>project</h2>
+      <div class="row">
+        <button id="save">save</button>
+        <button id="saveas">save as…</button>
+        <button id="open">open…</button>
+        <input type="file" id="legacyload" accept=".json" hidden>
+      </div>
+      <div class="hint" id="fname">unsaved</div>
+      <div id="recent" style="margin-top:8px"></div>
+    </div>
+    <div class="panel">
+      <h2>boxes</h2>
+      <div id="list"></div>
+      <div class="hint" id="empty">none yet</div>
+    </div>
+    <div class="panel" id="edit" hidden>
+      <h2>selected</h2>
+      <div class="row">
+        <select id="bmode">
+          <option value="black">black bar</option>
+          <option value="blur">blur</option>
+          <option value="pixelate">pixelate</option>
+        </select>
+        <select id="bc"><option value="black">black</option><option value="white">white</option><option value="red">red</option></select>
+        <input type="number" id="bstr" min="2" max="60" step="1" title="blur radius / pixel block" hidden>
+      </div>
+      <div class="row">
+        <button id="addkf">keyframe here</button>
+        <button id="del">delete box</button>
+      </div>
+      <h2 style="margin-top:12px">visible</h2>
+      <div id="spans"></div>
+      <div class="row"><button id="cut">cut at playhead</button><button id="addspan">+ span</button></div>
+      <h2 style="margin-top:12px">keyframes</h2>
+      <div id="kfs"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+const vid = document.getElementById('vid'), cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+let boxes = [], sel = null, nextId = 1;
+
+/* ---------- model ---------- */
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+const now = () => +vid.currentTime.toFixed(3);
+
+function sorted(b) { return [...b.kfs].sort((p,q) => p.t - q.t); }
+
+// value of key at time t: linear between keyframes, held flat outside
+function at(b, t, key) {
+  const k = sorted(b);
+  if (t <= k[0].t) return k[0][key];
+  if (t >= k[k.length-1].t) return k[k.length-1][key];
+  for (let i = 0; i < k.length-1; i++) {
+    if (t <= k[i+1].t) {
+      const dt = k[i+1].t - k[i].t;
+      return dt <= 0 ? k[i+1][key] : k[i][key] + (k[i+1][key]-k[i][key]) * (t-k[i].t)/dt;
+    }
+  }
+}
+const rectAt = (b,t) => ({ x:at(b,t,'x'), y:at(b,t,'y'), w:at(b,t,'w'), h:at(b,t,'h') });
+const visible = (b,t) => b.kfs.length && b.spans.some(s => t >= s.s && t <= s.e);
+
+function putKf(b, t, r) {
+  const e = b.kfs.find(k => Math.abs(k.t - t) < 0.001);
+  if (e) Object.assign(e, r); else b.kfs.push({ t, ...r });
+  render();
+}
+
+/* ---------- ffmpeg expression ---------- */
+// nested if() chain over t; constant tracks collapse to a bare number
+function expr(b, key) {
+  const k = sorted(b), v = i => Math.round(k[i][key]);
+  if (k.every(x => Math.round(x[key]) === v(0))) return String(v(0));
+  let e = String(v(k.length-1));
+  for (let i = k.length-2; i >= 0; i--) {
+    const dt = +(k[i+1].t - k[i].t).toFixed(3);
+    const seg = dt <= 0 ? String(v(i)) : `${v(i)}+(${v(i+1)-v(i)})*(t-${k[i].t})/${dt}`;
+    e = `if(lt(t,${k[i+1].t}),${seg},${e})`;
+  }
+  return `if(lt(t,${k[0].t}),${v(0)},${e})`;
+}
+
+const esc = s => s.replace(/,/g, '\\,');   // commas are filtergraph separators
+const even = v => Math.max(2, Math.ceil(v/2)*2);
+
+function graph(src = boxes) {
+  const list = src.filter(b => b.kfs.length && b.spans.length);
+  const parts = [];
+  let cur = '';                                    // '' = implicit graph input
+  list.forEach((b, i) => {
+    const out = i === list.length-1 ? '' : `[v${i}]`;
+    const en = esc(b.spans.map(s => `between(t,${s.s},${s.e})`).join('+'));
+    if (b.mode === 'black') {
+      const p = k => esc(expr(b, k));
+      parts.push(`${cur}drawbox=x=${p('x')}:y=${p('y')}:w=${p('w')}:h=${p('h')}`
+               + `:color=${b.color}@1:t=fill:enable=${en}${out}`);
+    } else {
+      // crop w/h are fixed at config time, so a blurred region can move but not resize:
+      // take the largest keyframe size, rounded up to even for yuv420p chroma
+      const W = even(Math.max(...b.kfs.map(k => k.w)));
+      const H = even(Math.max(...b.kfs.map(k => k.h)));
+      const pos = (k, lim) => esc(`2*floor(max(0,min(${lim},${expr(b,k)}))/2)`);
+      const fx = b.mode === 'blur'
+        ? `boxblur=${b.strength}:1`
+        : `scale=${Math.max(1,Math.round(W/b.strength))}:${Math.max(1,Math.round(H/b.strength))}`
+          + `,scale=${W}:${H}:flags=neighbor`;
+      parts.push(`${cur}split[m${i}][c${i}]`);
+      parts.push(`[c${i}]crop=${W}:${H}:${pos('x','in_w-out_w')}:${pos('y','in_h-out_h')},${fx}[b${i}]`);
+      parts.push(`[m${i}][b${i}]overlay=${pos('x','main_w-overlay_w')}:${pos('y','main_h-overlay_h')}`
+               + `:enable=${en}${out}`);
+    }
+    cur = out;
+  });
+  return parts.join(';');
+}
+
+/* ---------- self check ---------- */
+function selfTest() {
+  const ok = (c, m, got) => { if (!c) throw new Error(`selfTest ${m}: ${got}`); };
+  const b = { mode:'black', color:'black', spans:[{s:0,e:9}], kfs:[
+    {t:0,x:10,y:0,w:50,h:20}, {t:2,x:30,y:0,w:50,h:20} ] };
+  ok(expr(b,'w') === '50', 'constant track must collapse', expr(b,'w'));
+  ok(expr(b,'x') === 'if(lt(t,0),10,if(lt(t,2),10+(20)*(t-0)/2,30))', 'lerp expr', expr(b,'x'));
+  ok(Math.round(at(b,1,'x')) === 20, 'midpoint interp', at(b,1,'x'));
+  ok(Math.round(at(b,5,'x')) === 30, 'hold after last kf', at(b,5,'x'));
+  ok(graph([b]).includes('between(t\\,0\\,9)'), 'commas escaped', graph([b]));
+  const g = { ...b, spans:[{s:0,e:2},{s:5,e:9}] };
+  ok(graph([g]).includes('between(t\\,0\\,2)+between(t\\,5\\,9)'), 'spans OR-ed', graph([g]));
+  ok(!visible(g,3) && visible(g,6), 'gap hides the box');
+
+  const bl = graph([{ ...b, mode:'blur', strength:12 }]);
+  ok(/split\[m0\]\[c0\];\[c0\]crop=50:20:.*boxblur=12:1\[b0\];\[m0\]\[b0\]overlay=/.test(bl), 'blur chain', bl);
+  const px = graph([{ ...b, mode:'pixelate', strength:10 }]);
+  ok(px.includes('scale=5:2,scale=50:20:flags=neighbor'), 'pixelate chain', px);
+  // two boxes must be labelled through, last one unlabelled
+  const two = graph([b, { ...b, mode:'blur', strength:8 }]);
+  ok(two.includes('[v0]split') && !two.includes('[v1]'), 'chain labels', two);
+}
+selfTest();
+
+/* ---------- canvas ---------- */
+const scale = () => vid.clientWidth / (vid.videoWidth || 1);
+const toVid = e => { const r = cv.getBoundingClientRect(), s = scale();
+                     return { x:(e.clientX-r.left)/s, y:(e.clientY-r.top)/s }; };
+
+function draw() {
+  const s = scale();
+  if (cv.width !== cv.clientWidth) { cv.width = cv.clientWidth; cv.height = cv.clientHeight; }
+  ctx.clearRect(0,0,cv.width,cv.height);
+  const t = vid.currentTime;
+  for (const b of boxes) {
+    if (!visible(b, t)) continue;
+    const r = rectAt(b, t);
+    if (b.mode === 'black') {
+      ctx.fillStyle = b.color;
+      ctx.fillRect(r.x*s, r.y*s, r.w*s, r.h*s);
+    } else {
+      ctx.save();
+      ctx.beginPath(); ctx.rect(r.x*s, r.y*s, r.w*s, r.h*s); ctx.clip();
+      ctx.filter = `blur(${Math.max(1, b.strength*s)}px)`;
+      ctx.drawImage(vid, 0, 0, cv.width, cv.height);
+      ctx.restore(); ctx.filter = 'none';
+    }
+    if (b === sel) {
+      ctx.strokeStyle = '#ffb454'; ctx.lineWidth = 2;
+      ctx.strokeRect(r.x*s, r.y*s, r.w*s, r.h*s);
+      ctx.fillStyle = '#ffb454'; ctx.fillRect(r.x*s+r.w*s-8, r.y*s+r.h*s-8, 8, 8);
+    }
+  }
+  document.getElementById('clock').textContent = t.toFixed(2) + ' s';
+  if (document.activeElement !== seek) seek.value = t;
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+/* ---------- interaction ---------- */
+let drag = null;
+
+// -> null (empty) | {b, corner}
+function hitTest(p) {
+  const t = now(), s = scale();
+  for (const b of [...boxes].reverse()) {
+    if (!visible(b, t)) continue;
+    const r = rectAt(b, t);
+    if (p.x >= r.x && p.x <= r.x+r.w && p.y >= r.y && p.y <= r.y+r.h)
+      return { b, r, corner: p.x > r.x+r.w-10/s && p.y > r.y+r.h-10/s };
+  }
+  return null;
+}
+const hitCursor = p => { const h = hitTest(p); return !h ? 'crosshair' : h.corner ? 'nwse-resize' : 'move'; };
+
+cv.addEventListener('pointerdown', e => {
+  if (!vid.videoWidth) return;
+  cv.setPointerCapture(e.pointerId);
+  const p = toVid(e), t = now(), hit = hitTest(p);
+  if (hit) {
+    sel = hit.b; render();
+    drag = { b:hit.b, t, mode: hit.corner ? 'size' : 'move',
+             ox:p.x-hit.r.x, oy:p.y-hit.r.y, r:hit.r };
+    return;
+  }
+  const b = { id:nextId++, mode:'black', color:'black', strength:12,
+              spans:[{ s:0, e:+vid.duration.toFixed(3) }],
+              kfs:[{ t, x:p.x, y:p.y, w:1, h:1 }] };
+  boxes.push(b); sel = b; render();
+  drag = { b, t, mode:'new', ox:p.x, oy:p.y };
+});
+cv.addEventListener('pointermove', e => {
+  if (!drag) { cv.style.cursor = hitCursor(toVid(e)); return; }
+  const p = toVid(e), W = vid.videoWidth, H = vid.videoHeight;
+  let r;
+  if (drag.mode === 'new')
+    r = { x:Math.min(p.x,drag.ox), y:Math.min(p.y,drag.oy),
+          w:Math.abs(p.x-drag.ox), h:Math.abs(p.y-drag.oy) };
+  else if (drag.mode === 'size')
+    r = { ...drag.r, w:clamp(p.x-drag.r.x,4,W), h:clamp(p.y-drag.r.y,4,H) };
+  else
+    r = { ...drag.r, x:clamp(p.x-drag.ox,0,W-drag.r.w), y:clamp(p.y-drag.oy,0,H-drag.r.h) };
+  putKf(drag.b, drag.t, r);
+});
+cv.addEventListener('pointerup', () => {
+  if (drag && drag.mode === 'new' && (drag.b.kfs[0].w < 4 || drag.b.kfs[0].h < 4)) {
+    boxes = boxes.filter(b => b !== drag.b); sel = null;   // stray click
+  }
+  drag = null; render();
+});
+
+/* ---------- panel ---------- */
+function render() {
+  const list = document.getElementById('list');
+  list.innerHTML = '';
+  document.getElementById('empty').hidden = boxes.length > 0;
+  boxes.forEach((b,i) => {
+    const d = document.createElement('div');
+    d.className = 'box-item' + (b === sel ? ' sel' : '');
+    d.textContent = `#${i+1} ${b.mode} · ${b.kfs.length} kf · ${b.spans.length} span`;
+    d.onclick = () => { sel = b; render(); };
+    list.appendChild(d);
+  });
+
+  const ed = document.getElementById('edit');
+  ed.hidden = !sel;
+  if (!sel) return;
+  document.getElementById('bc').value = sel.color;
+  document.getElementById('bmode').value = sel.mode;
+  document.getElementById('bstr').value = sel.strength;
+  document.getElementById('bc').hidden = sel.mode !== 'black';
+  document.getElementById('bstr').hidden = sel.mode === 'black';
+
+  const sp = document.getElementById('spans');
+  sp.innerHTML = '';
+  sel.spans.sort((a,b) => a.s - b.s).forEach(s => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    for (const k of ['s','e']) {
+      const inp = document.createElement('input');
+      inp.type = 'number'; inp.step = '0.01'; inp.value = s[k]; inp.style.width = '68px';
+      inp.oninput = () => { s[k] = +inp.value; render(); };
+      const set = document.createElement('button');
+      set.textContent = '⌖'; set.title = 'set from playhead';
+      set.onclick = () => { s[k] = now(); render(); };
+      row.append(inp, set);
+    }
+    const x = document.createElement('span');
+    x.className = 'x'; x.textContent = '×';
+    x.onclick = () => { sel.spans = sel.spans.filter(q => q !== s); render(); };
+    row.appendChild(x);
+    sp.appendChild(row);
+  });
+
+  const kf = document.getElementById('kfs');
+  kf.innerHTML = '';
+  sorted(sel).forEach(k => {
+    const d = document.createElement('div');
+    d.className = 'kf';
+    d.innerHTML = `<b>${k.t.toFixed(2)}s</b> ${Math.round(k.x)},${Math.round(k.y)} ${Math.round(k.w)}×${Math.round(k.h)}`;
+    d.querySelector('b').onclick = () => vid.currentTime = k.t;
+    const x = document.createElement('span');
+    x.className = 'x'; x.textContent = '×';
+    x.onclick = () => { if (sel.kfs.length > 1) { sel.kfs = sel.kfs.filter(q => q !== k); render(); } };
+    d.appendChild(x); kf.appendChild(d);
+  });
+  document.getElementById('out').value =
+    `ffmpeg -i in.mp4 -filter_script:v boxes.txt -c:v libx264 -crf 18 -preset veryfast -c:a copy out.mp4\n\n` + graph();
+}
+
+const stage = document.getElementById('stage'), seek = document.getElementById('seek'),
+      play = document.getElementById('play');
+
+// never upscale past native pixels, and keep the frame inside the viewport
+function fit() {
+  if (!vid.videoWidth) return;
+  const maxH = window.innerHeight * 0.62;
+  stage.style.width = Math.min(vid.videoWidth, stage.parentElement.clientWidth,
+                               maxH * vid.videoWidth / vid.videoHeight) + 'px';
+}
+addEventListener('resize', fit);
+
+document.getElementById('file').onchange = e => {
+  const f = e.target.files[0];
+  vid.dataset.name = f.name;
+  vid.src = URL.createObjectURL(f);
+  vid.onloadedmetadata = () => { seek.max = vid.duration; fit(); render(); };
+};
+play.onclick = () => vid.paused ? vid.play() : vid.pause();
+vid.onplay = () => play.textContent = '❚❚';
+vid.onpause = () => play.textContent = '▶';
+seek.oninput = () => vid.currentTime = +seek.value;
+addEventListener('keydown', e => {
+  if (e.code === 'Space' && e.target.tagName !== 'INPUT') { e.preventDefault(); play.onclick(); }
+});
+document.getElementById('bc').onchange = e => { sel.color = e.target.value; render(); };
+document.getElementById('bmode').onchange = e => { sel.mode = e.target.value; render(); };
+document.getElementById('bstr').oninput = e => { sel.strength = +e.target.value || 12; render(); };
+document.getElementById('addspan').onclick = () => {
+  sel.spans.push({ s: now(), e: +vid.duration.toFixed(3) }); render();
+};
+// splits the span under the playhead so the box vanishes from here on, until the next span
+document.getElementById('cut').onclick = () => {
+  const t = now(), d = 1 / (+document.getElementById('fps').value || 25);
+  const s = sel.spans.find(q => t >= q.s && t <= q.e);
+  if (!s) return;
+  const tail = { s: +(t + d).toFixed(3), e: s.e };
+  s.e = +(t - d).toFixed(3);
+  if (tail.e > tail.s) sel.spans.push(tail);
+  sel.spans = sel.spans.filter(q => q.e > q.s);
+  render();
+};
+document.getElementById('addkf').onclick = () => putKf(sel, now(), rectAt(sel, vid.currentTime));
+document.getElementById('del').onclick = () => { boxes = boxes.filter(b => b !== sel); sel = null; render(); };
+const step = d => vid.currentTime = clamp(vid.currentTime + d/(+document.getElementById('fps').value||25), 0, vid.duration);
+document.getElementById('prev').onclick = () => step(-1);
+document.getElementById('next').onclick = () => step(1);
+
+function dl(name, text) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], {type:'text/plain'}));
+  a.download = name; a.click();
+}
+document.getElementById('dlfilter').onclick = () => dl('boxes.txt', graph());
+document.getElementById('copycmd').onclick = () =>
+  navigator.clipboard.writeText(`ffmpeg -i in.mp4 -vf '${graph()}' -c:v libx264 -crf 18 -c:a copy out.mp4`);
+
+/* ---------- project files ---------- */
+// File handles are structured-cloneable but not JSON-able, so recents live in IndexedDB.
+const FSA = 'showSaveFilePicker' in window;
+const PICK = { types:[{ description:'Redact project', accept:{'application/json':['.json']} }] };
+let handle = null;
+
+function idb(mode, fn) {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('boxredact', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onerror = () => rej(r.error);
+    r.onsuccess = () => {
+      const q = fn(r.result.transaction('kv', mode).objectStore('kv'));
+      q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error);
+    };
+  });
+}
+const getRecent = () => idb('readonly', s => s.get('recent')).then(v => v || []);
+
+async function pushRecent(h) {
+  const list = (await getRecent()).filter(e => e.name !== h.name);
+  list.unshift({ name:h.name, handle:h, at:Date.now() });
+  await idb('readwrite', s => s.put(list.slice(0, 8), 'recent'));
+  drawRecent();
+}
+
+async function drawRecent() {
+  const el = document.getElementById('recent');
+  el.innerHTML = '';
+  if (!FSA) { el.innerHTML = '<span class="hint">no File System Access API in this browser, using download/upload</span>'; return; }
+  for (const e of await getRecent()) {
+    const d = document.createElement('div');
+    d.className = 'kf';
+    d.innerHTML = `<b>${e.name}</b> <span class="hint">${new Date(e.at).toLocaleDateString()}</span>`;
+    d.querySelector('b').onclick = () => loadHandle(e.handle);
+    const x = document.createElement('span');
+    x.className = 'x'; x.textContent = '×';
+    x.onclick = async () => {
+      const list = (await getRecent()).filter(q => q.name !== e.name);
+      await idb('readwrite', s => s.put(list, 'recent'));
+      drawRecent();
+    };
+    d.appendChild(x); el.appendChild(d);
+  }
+}
+
+const project = () => ({ video: vid.dataset.name || '', boxes });
+function applyProject(p) {
+  boxes = p.boxes || [];
+  for (const b of boxes) {
+    if (!b.spans) b.spans = [{ s:b.start ?? 0, e:b.end ?? 1e6 }];  // pre-span files
+    b.mode ??= 'black'; b.strength ??= 12; b.color ??= 'black';
+  }
+  nextId = boxes.length + 1; sel = null; render();
+  if (p.video && vid.dataset.name && p.video !== vid.dataset.name)
+    alert(`project was made against "${p.video}", currently loaded is "${vid.dataset.name}"`);
+}
+function setName(n) { document.getElementById('fname').textContent = n || 'unsaved'; }
+
+async function writeTo(h) {
+  const w = await h.createWritable();
+  await w.write(JSON.stringify(project(), null, 1));
+  await w.close();
+  handle = h; setName(h.name); await pushRecent(h);
+}
+async function loadHandle(h) {
+  if (await h.queryPermission({ mode:'readwrite' }) !== 'granted'
+      && await h.requestPermission({ mode:'readwrite' }) !== 'granted') return;
+  applyProject(JSON.parse(await (await h.getFile()).text()));
+  handle = h; setName(h.name); await pushRecent(h);
+}
+
+document.getElementById('save').onclick = async () => {
+  if (!FSA) return dl('redact.json', JSON.stringify(project(), null, 1));
+  await writeTo(handle || await showSaveFilePicker({ suggestedName:'redact.json', ...PICK }));
+};
+document.getElementById('saveas').onclick = async () => {
+  if (!FSA) return dl('redact.json', JSON.stringify(project(), null, 1));
+  await writeTo(await showSaveFilePicker({ suggestedName: handle?.name || 'redact.json', ...PICK }));
+};
+document.getElementById('open').onclick = async () => {
+  if (!FSA) return document.getElementById('legacyload').click();
+  const [h] = await showOpenFilePicker(PICK);
+  await loadHandle(h);
+};
+document.getElementById('legacyload').onchange = async e =>
+  applyProject(JSON.parse(await e.target.files[0].text()));
+
+addEventListener('keydown', e => {
+  if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); document.getElementById('save').onclick(); }
+});
+drawRecent();
+</script>

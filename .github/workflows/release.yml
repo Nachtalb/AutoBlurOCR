@@ -1,0 +1,91 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'tag to release, e.g. v0.3.0'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: frontend self-test
+        run: node tools/jstest.mjs
+
+      - name: fetch ffmpeg sidecars
+        shell: pwsh
+        run: |
+          $url = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.7z'
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.7z -UseBasicParsing
+          7z x ffmpeg.7z -offmpeg -y | Out-Null
+          $bin = (Get-ChildItem ffmpeg -Recurse -Filter ffmpeg.exe | Select-Object -First 1).DirectoryName
+          New-Item -ItemType Directory -Force src-tauri/binaries | Out-Null
+          Copy-Item "$bin\ffmpeg.exe"  src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe
+          Copy-Item "$bin\ffprobe.exe" src-tauri/binaries/ffprobe-x86_64-pc-windows-msvc.exe
+
+      # A release that leaks text is worse than no release: the acceptance tests, including the
+      # export round trip, gate the installer.
+      - name: acceptance tests
+        run: cargo test --no-default-features --manifest-path src-tauri/Cargo.toml -- --include-ignored
+
+      - name: refuse to release if the tag and the manifest disagree
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag }}"
+          if (-not $tag) { $tag = "${{ github.ref_name }}" }
+          $ver = (Select-String -Path src-tauri/tauri.conf.json -Pattern '"version"\s*:\s*"([^"]+)"').Matches[0].Groups[1].Value
+          if ($tag -ne "v$ver") {
+            throw "tag $tag does not match tauri.conf.json version $ver — the redaction log records this version, so they must agree"
+          }
+          "releasing v$ver"
+
+      - name: install tauri-cli
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: build installer
+        run: cargo tauri build
+        working-directory: src-tauri
+
+      - name: checksum
+        shell: pwsh
+        run: |
+          $f = Get-ChildItem src-tauri/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          (Get-FileHash $f.FullName -Algorithm SHA256).Hash | Out-File "$($f.FullName).sha256" -Encoding ascii -NoNewline
+          "$($f.Name)  $((Get-FileHash $f.FullName -Algorithm SHA256).Hash)"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/nsis/*-setup.exe.sha256
+          body: |
+            Offline OCR-driven text redaction for video. Windows 11, no network.
+
+            The installer bundles ffmpeg and ffprobe; nothing is resolved from `PATH`.
+            Installs per-user to `%LOCALAPPDATA%\AutoBlur`, so no admin prompt.
+
+            An OCR language pack must be installed:
+            *Settings > Time & language > Language > (language) > Language options >
+            Optional features > Optical character recognition*.
+
+            Verify the download against the `.sha256` beside it.

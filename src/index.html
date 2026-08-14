@@ -1,0 +1,1878 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>AutoBlur — OCR redaction</title>
+<style>
+  :root { --bg:#14161a; --panel:#1c1f26; --line:#2c313b; --fg:#e6e8ec; --dim:#8b93a3;
+          --acc:#ffb454; --bad:#e06c75; --ok:#98c379; --info:#61afef; --fuzz:#c678dd; }
+  * { box-sizing:border-box; }
+  /* inline display:flex on a pane would otherwise beat the hidden attribute */
+  [hidden] { display:none !important; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--fg); overflow:hidden;
+         font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+
+  /* scrollbars: the default light ones are jarring on this palette */
+  * { scrollbar-width:thin; scrollbar-color:#3a4150 transparent; }
+  ::-webkit-scrollbar { width:9px; height:9px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:#3a4150; border-radius:5px;
+                              border:2px solid var(--panel); }
+  ::-webkit-scrollbar-thumb:hover { background:var(--acc); }
+  ::-webkit-scrollbar-corner { background:transparent; }
+
+  header { height:38px; padding:0 12px; border-bottom:1px solid var(--line);
+           display:flex; gap:10px; align-items:center; }
+  h1 { font-size:13px; margin:0; font-weight:600; letter-spacing:.06em; color:var(--acc); }
+
+  /* three columns, full height, nothing scrolls except designated panes */
+  main { display:grid; grid-template-columns:300px minmax(0,1fr) 320px;
+         gap:10px; padding:10px; height:calc(100vh - 38px); }
+  .col { display:flex; flex-direction:column; gap:10px; min-height:0; }
+
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:6px;
+           padding:9px; display:flex; flex-direction:column; min-height:0; }
+  .panel.grow { flex:1; }
+  h2 { font-size:11px; margin:0 0 7px; color:var(--dim); text-transform:uppercase;
+       letter-spacing:.08em; display:flex; align-items:center; gap:6px; flex:0 0 auto; }
+  h2 .n { color:var(--acc); }
+  h2 .why { color:var(--dim); cursor:help; border:1px solid var(--line); border-radius:50%;
+            width:14px; height:14px; display:inline-flex; align-items:center;
+            justify-content:center; font-size:10px; margin-left:auto; }
+  .scroll { overflow-y:auto; overflow-x:hidden; min-height:0; flex:1; }
+
+  button, input, select, textarea { background:#252932; color:var(--fg);
+      border:1px solid var(--line); border-radius:4px; padding:4px 7px; font:inherit; }
+  button { cursor:pointer; white-space:nowrap; }
+  button:hover:not(:disabled) { border-color:var(--acc); }
+  button:disabled, input:disabled, select:disabled { opacity:.4; cursor:default; }
+  button.pri { border-color:var(--acc); color:var(--acc); }
+  button.danger:hover { border-color:var(--bad); color:var(--bad); }
+  button.tab { border-color:transparent; color:var(--dim); padding:2px 8px; }
+  button.tab.on { border-color:var(--acc); color:var(--acc); }
+  input[type=number] { width:64px; }
+  input[type=checkbox] { accent-color:var(--acc); }
+  .row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; flex:0 0 auto; }
+  .row + .row { margin-top:6px; }
+  .hint { color:var(--dim); font-size:11.5px; line-height:1.4; }
+  .sep { height:1px; background:var(--line); margin:8px 0; flex:0 0 auto; }
+
+  #stage { position:relative; line-height:0; background:#000; margin:0 auto; }
+  video { width:100%; display:block; }
+  canvas { position:absolute; inset:0; width:100%; height:100%; cursor:crosshair; }
+  #peek { position:absolute; top:6px; left:6px; background:#000a; color:var(--acc);
+          padding:2px 6px; border-radius:3px; font-size:11px; line-height:1.4; }
+  #seek { flex:1; min-width:80px; accent-color:var(--acc); padding:0; }
+
+  /* string list */
+  .grp { border-radius:4px; }
+  .grp-head, .mem { display:flex; gap:6px; align-items:center; padding:3px 4px;
+                    border-radius:4px; cursor:pointer; }
+  .grp-head:hover, .mem:hover { background:#252932; }
+  .mem { padding-left:22px; font-size:12px; color:var(--dim); }
+  .tw { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cnt { color:var(--acc); font-size:11px; }
+  .ts { color:var(--dim); font-size:10.5px; }
+  .caret { width:10px; color:var(--dim); font-size:10px; text-align:center; }
+  .done { color:var(--ok); font-size:11px; }
+
+  /* box list */
+  .box-item { padding:4px 6px; border:1px solid var(--line); border-radius:4px;
+              margin-bottom:4px; cursor:pointer; display:flex; gap:6px; align-items:center; }
+  .box-item.sel { border-color:var(--acc); background:#252932; }
+  .box-item .tw { font-size:12px; }
+  .kf { display:flex; gap:6px; align-items:center; color:var(--dim); font-size:11.5px;
+        padding:1px 0; }
+  .kf b { color:var(--fg); font-weight:500; cursor:pointer; }
+  .x { color:var(--bad); cursor:pointer; padding:0 4px; }
+  .tag { font-size:10px; padding:0 4px; border-radius:3px; border:1px solid currentColor; }
+  .tag.exact { color:var(--ok); } .tag.substr { color:var(--info); }
+  .tag.fuzzy { color:var(--fuzz); } .tag.regex { color:var(--acc); }
+  .tag.dropped { color:var(--bad); }
+  textarea { width:100%; background:#0f1115; color:#9ecbff; resize:none; flex:1;
+             font:11px/1.4 ui-monospace,monospace; min-height:0; }
+  progress { width:100%; height:5px; accent-color:var(--acc); }
+  .warn { color:var(--acc); } .err { color:var(--bad); } .good { color:var(--ok); }
+  label { display:inline-flex; gap:4px; align-items:center; cursor:pointer; }
+
+  /* The webview silently returns true from window.confirm and swallows window.alert, so a
+     native dialog is neither a gate nor a message. These are. */
+  #toast { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); z-index:20;
+           background:#252932; border:1px solid var(--acc); color:var(--fg);
+           padding:8px 14px; border-radius:6px; max-width:70vw; box-shadow:0 6px 24px #0008; }
+  #toast.err { border-color:var(--bad); }
+  #modal { position:fixed; inset:0; z-index:30; background:#000b;
+           display:flex; align-items:center; justify-content:center; }
+  #modal .card { background:var(--panel); border:1px solid var(--acc); border-radius:8px;
+                 padding:16px; max-width:560px; box-shadow:0 8px 40px #000a; }
+  #modal .card p { margin:0 0 12px; white-space:pre-wrap; line-height:1.5; }
+  #done { position:fixed; inset:0; z-index:30; background:#000b;
+          display:flex; align-items:center; justify-content:center; }
+  #done .card { background:var(--panel); border:1px solid var(--acc); border-radius:8px;
+                padding:16px; width:min(620px,86vw); box-shadow:0 8px 40px #000a; }
+  #done .card p { margin:0 0 10px; line-height:1.5; }
+</style>
+
+<header>
+  <h1>AUTOBLUR</h1>
+  <button id="pick" class="pri">open video…</button>
+  <span class="hint" id="vinfo">no video</span>
+</header>
+
+<main>
+  <!-- ==================== left: find text ==================== -->
+  <div class="col">
+    <div class="panel">
+      <h2>1 · read the video</h2>
+      <div class="row">
+        <select id="lang" style="flex:1"></select>
+      </div>
+      <div class="row">
+        <span class="hint">check</span>
+        <input type="number" id="rate" value="2" step="1" min="0.1" style="width:52px">
+        <span class="hint">frames/sec</span>
+        <button id="runocr" class="pri" style="margin-left:auto">read</button>
+        <button id="cancelocr" hidden>stop</button>
+      </div>
+      <progress id="ocrprog" value="0" max="1" hidden style="margin-top:6px"></progress>
+      <div class="hint" id="ocrstat" style="margin-top:4px"></div>
+    </div>
+
+    <div class="panel grow">
+      <h2>2 · pick what to hide <span class="n" id="nstr"></span>
+        <span class="why" title="Every distinct piece of text found in the video. Near-identical readings of the same thing are grouped — tick the group to catch all its spellings.">?</span>
+      </h2>
+      <div class="row">
+        <input id="filter" placeholder="filter…" style="flex:1;min-width:0">
+        <button id="selall" title="tick everything shown">all</button>
+        <button id="selnone" title="untick everything">none</button>
+      </div>
+      <div class="row">
+        <input id="rx" placeholder="regex — e.g. \d{2}-[A-Z]{3}" style="flex:1;min-width:0" disabled>
+      </div>
+      <div class="hint" id="rxstat" style="margin-top:4px"></div>
+      <div class="scroll" id="strings" style="margin-top:6px"></div>
+    </div>
+
+    <div class="panel">
+      <h2>3 · hide it</h2>
+      <div class="row">
+        <span class="hint">style</span>
+        <select id="genmode" style="flex:1">
+          <option value="pixelate">pixelate</option>
+          <option value="blur">blur</option>
+          <option value="black">black bar</option>
+        </select>
+      </div>
+      <div class="row">
+        <span class="hint" title="OCR drops frames on motion blur. A dropout shorter than this keeps the box on, covering the whole gap.">bridge dropouts up to</span>
+        <input type="number" id="gapSec" value="0.5" min="0" step="0.1" style="width:52px"> s
+      </div>
+      <div class="row">
+        <span class="hint" title="Extra pixels around each detection.">margin</span>
+        <input type="number" id="padPx" value="6" min="0" step="1" style="width:52px"> px
+      </div>
+      <div class="row">
+        <span class="hint" title="Jump: each box holds the rect OCR actually measured until the next reading. Slide: the box travels between readings, inventing positions in between.">between readings</span>
+        <select id="interp" style="flex:1">
+          <option value="step">jump</option>
+          <option value="linear">slide</option>
+        </select>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="gen" class="pri" style="flex:1">hide selected</button>
+      </div>
+      <div class="hint" id="genstat" style="margin-top:5px"></div>
+    </div>
+  </div>
+
+  <!-- ==================== centre: video + checking ==================== -->
+  <div class="col">
+    <div class="panel" style="flex:0 0 auto">
+      <div id="stage"><video id="vid"></video><canvas id="cv"></canvas>
+        <span id="peek" hidden>boxes hidden — is the text visible?</span></div>
+      <div class="row" style="margin-top:8px">
+        <button id="play">▶</button>
+        <input type="range" id="seek" min="0" max="1" step="0.001" value="0">
+        <span class="hint" id="clock">0.00 s</span>
+      </div>
+      <div class="row">
+        <button id="prev">◀ frame</button><button id="next">frame ▶</button>
+        <span class="hint">video fps</span>
+        <input type="number" id="fps" value="25" step="1" min="1" style="width:52px">
+        <span class="hint" style="margin-left:auto">drag on the video to draw a box by hand</span>
+      </div>
+    </div>
+
+    <div class="panel grow" id="check">
+      <h2>4 · check before exporting
+        <span class="n" id="checkn"></span>
+        <span class="why" title="Generated redactions are proposals. Nothing here is automatic — step through and confirm.">?</span>
+      </h2>
+      <div class="row">
+        <button class="tab on" data-tab="hits" id="tab-hits">every hit</button>
+        <button class="tab" data-tab="gaps" id="tab-gaps">guessed stretches</button>
+        <button class="tab" data-tab="miss" id="tab-miss">almost matched</button>
+      </div>
+      <div class="sep"></div>
+
+      <div id="pane-hits" style="display:flex;flex-direction:column;min-height:0;flex:1">
+        <div class="hint">Each place the text was found. Step through them and confirm the box
+          sits over the text; drop any that are wrong.</div>
+        <div class="row" style="margin-top:7px">
+          <button id="hprev">◀ prev</button><button id="hnext">next ▶</button>
+          <span id="hitn" class="hint"></span>
+          <button id="hdrop" style="margin-left:auto">drop this one</button>
+        </div>
+        <div class="row"><span id="hitinfo" class="hint"></span></div>
+        <div class="sep"></div>
+        <div class="hint">Jump just outside the redaction with the boxes switched off, to see
+          whether the text is readable there:</div>
+        <div class="row" style="margin-top:6px">
+          <button id="peekb">◀ frame before it starts</button>
+          <button id="peeka">frame after it ends ▶</button>
+        </div>
+      </div>
+
+      <div id="pane-gaps" hidden style="flex-direction:column;min-height:0;flex:1">
+        <div class="hint">OCR lost the text for these stretches — motion blur, compression, a
+          hand passing over it. The box was held across the gap at a size covering both ends,
+          rather than switching off. Play each one and confirm it stayed covered.</div>
+        <div class="scroll" id="gaplist" style="margin-top:7px"></div>
+      </div>
+
+      <div id="pane-miss" hidden style="flex-direction:column;min-height:0;flex:1">
+        <div class="hint">Text that <b>nearly</b> matched what you picked but was left visible —
+          usually a bad OCR reading of the same thing, or text half out of frame. This is where
+          a leak hides. Check each one; add it if it is the same thing.</div>
+        <div class="scroll" id="misslist" style="margin-top:7px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== right: boxes ==================== -->
+  <div class="col">
+    <div class="panel">
+      <h2>project <span class="hint" id="fname" style="margin-left:auto">unsaved</span></h2>
+      <div class="row">
+        <button id="export" class="pri" style="flex:1">render redacted video…</button>
+      </div>
+      <div class="row">
+        <button id="save">save</button>
+        <button id="saveas">save as…</button>
+        <button id="open">open…</button>
+        <button id="reset" class="danger" style="margin-left:auto">reset</button>
+      </div>
+      <progress id="expprog" value="0" max="1" hidden style="margin-top:6px"></progress>
+      <div class="hint" id="expstat" style="margin-top:4px"></div>
+      <div class="row" style="margin-top:6px">
+        <button id="verify" disabled style="flex:1"
+          title="Re-reads the exported file and checks none of the redacted text can still be found.">verify the exported file</button>
+      </div>
+      <div id="recent"></div>
+    </div>
+
+    <div class="panel" style="flex:0 0 auto">
+      <h2>boxes <span class="n" id="nbox"></span></h2>
+      <div class="row">
+        <span class="hint">all:</span>
+        <select id="allmode" style="flex:1">
+          <option value="">set style for every box…</option>
+          <option value="pixelate">pixelate</option>
+          <option value="blur">blur</option>
+          <option value="black">black bar</option>
+        </select>
+        <button id="delall" class="danger" title="remove every box">clear</button>
+      </div>
+      <div class="scroll" id="list" style="max-height:150px;margin-top:6px"></div>
+      <div class="hint" id="empty">none yet — pick text on the left, or drag on the video</div>
+    </div>
+
+    <div class="panel grow" id="edit">
+      <h2>selected box <span class="n" id="selname"></span></h2>
+      <div class="hint" id="nosel">nothing selected</div>
+      <div id="selbody" hidden style="display:flex;flex-direction:column;min-height:0;flex:1">
+        <div class="row">
+          <select id="bmode">
+            <option value="black">black bar</option>
+            <option value="blur">blur</option>
+            <option value="pixelate">pixelate</option>
+          </select>
+          <select id="bc"><option value="black">black</option><option value="white">white</option><option value="red">red</option></select>
+          <input type="number" id="bstr" min="2" max="60" step="1" title="blur radius / pixel block" hidden>
+          <select id="binterp" title="how the box behaves between its keyframes">
+            <option value="step">jump</option>
+            <option value="linear">slide</option>
+          </select>
+          <button id="del" class="danger" style="margin-left:auto" title="Delete key">delete</button>
+        </div>
+        <div class="hint" id="bwarn"></div>
+        <div class="sep"></div>
+        <h2>visible from → to</h2>
+        <div id="spans"></div>
+        <div class="row">
+          <button id="cut">split here</button>
+          <button id="addspan">+ range</button>
+          <button id="addkf" style="margin-left:auto">keyframe here</button>
+        </div>
+        <div class="sep"></div>
+        <h2>keyframes <span class="n" id="nkf"></span></h2>
+        <div class="scroll" id="kfs"></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div id="toast" hidden></div>
+<div id="modal" hidden><div class="card">
+  <p id="modal-msg"></p>
+  <div class="row" style="justify-content:flex-end">
+    <button id="modal-no">cancel</button>
+    <button id="modal-yes" class="pri">go ahead</button>
+  </div>
+</div></div>
+
+<div id="done" hidden><div class="card">
+  <h2 style="margin-bottom:10px">export finished</h2>
+  <p id="done-path" style="font-size:12px;color:var(--dim);word-break:break-all"></p>
+  <p id="done-info" style="font-size:12px"></p>
+  <div class="row">
+    <button id="done-folder">show in folder</button>
+    <button id="done-open">play the file</button>
+    <button id="done-verify" class="pri">check the text is gone</button>
+    <button id="done-close" style="margin-left:auto">close</button>
+  </div>
+  <div class="hint" id="done-stat" style="margin-top:10px"></div>
+</div></div>
+
+<script>
+/* ==================== PURE START ====================
+   Everything between these markers is DOM-free and is executed headlessly by
+   tools/jstest.mjs. Do not touch `document`, `window` or `vid` in here. */
+
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+
+/* ---------- box model (ported verbatim from video-box-redact.html) ---------- */
+function sorted(b) { return [...b.kfs].sort((p,q) => p.t - q.t); }
+
+/* Value of key at time t, held flat outside the keyframe range.
+
+   `interp:'step'` holds each keyframe until the next one instead of sliding between them.
+   That is the right default for generated boxes: OCR measured a rect on a specific frame, and
+   when the sampling rate matches the video every frame has its own measurement — sliding
+   between them replaces a measurement with a guess. Hand-drawn boxes keep 'linear', because
+   there the keyframes are waypoints the user set and expects the box to travel between. */
+function at(b, t, key) {
+  const k = sorted(b);
+  if (t <= k[0].t) return k[0][key];
+  if (t >= k[k.length-1].t) return k[k.length-1][key];
+  if (b.interp === 'step') {
+    let v = k[0][key];
+    for (const kf of k) { if (kf.t <= t + 1e-9) v = kf[key]; else break; }
+    return v;
+  }
+  for (let i = 0; i < k.length-1; i++) {
+    if (t <= k[i+1].t) {
+      const dt = k[i+1].t - k[i].t;
+      return dt <= 0 ? k[i+1][key] : k[i][key] + (k[i+1][key]-k[i][key]) * (t-k[i].t)/dt;
+    }
+  }
+}
+const rectAt = (b,t) => ({ x:at(b,t,'x'), y:at(b,t,'y'), w:at(b,t,'w'), h:at(b,t,'h') });
+const visible = (b,t) => b.kfs.length && b.spans.some(s => t >= s.s && t <= s.e);
+
+/* ---------- ffmpeg expression ---------- */
+// Flat sum of time-guarded segments; constant tracks collapse to a bare number.
+//
+// NOT a nested if() chain. ffmpeg's expression parser (libavutil/eval.c) recurses per nesting
+// level and gives up after ~100 — one keyframe per video frame blows straight through that and
+// the export dies with "Failed to configure input pad". Addition is parsed in a loop, so a flat
+// sum of any length costs a single level. Exactly one guard is true at any t, so the sum is the
+// value.
+function expr(b, key) {
+  const k = sorted(b), v = i => Math.round(k[i][key]);
+  const last = k.length - 1;
+  if (k.every(x => Math.round(x[key]) === v(0))) return String(v(0));
+  const step = b.interp === 'step';
+  const terms = [`lt(t,${k[0].t})*(${v(0)})`];
+  for (let i = 0; i < last; i++) {
+    const dt = +(k[i+1].t - k[i].t).toFixed(3);
+    const seg = (step || dt <= 0) ? `(${v(i)})`
+              : `(${v(i)}+(${v(i+1)-v(i)})*(t-${k[i].t})/${dt})`;
+    terms.push(`gte(t,${k[i].t})*lt(t,${k[i+1].t})*${seg}`);
+  }
+  terms.push(`gte(t,${k[last].t})*(${v(last)})`);
+  return terms.join('+');
+}
+
+// Evaluate what expr() emits, for tests and for the "does the preview match the export" check.
+// Supports exactly the dialect expr() produces: t, numbers, + - * /, lt(), gte().
+function evalExpr(s, t) {
+  return Function('t', 'lt', 'gte', `return ${s};`)(
+    t, (a, b) => (a < b ? 1 : 0), (a, b) => (a >= b ? 1 : 0));
+}
+
+const esc = s => s.replace(/,/g, '\\,');   // commas are filtergraph separators
+const even = v => Math.max(2, Math.ceil(v/2)*2);
+
+function graph(src) {
+  const list = src.filter(b => b.kfs.length && b.spans.length);
+  const parts = [];
+  let cur = '';                                    // '' = implicit graph input
+  list.forEach((b, i) => {
+    const out = i === list.length-1 ? '' : `[v${i}]`;
+    const en = esc(b.spans.map(s => `between(t,${s.s},${s.e})`).join('+'));
+    if (b.mode === 'black') {
+      const p = k => esc(expr(b, k));
+      parts.push(`${cur}drawbox=x=${p('x')}:y=${p('y')}:w=${p('w')}:h=${p('h')}`
+               + `:color=${b.color}@1:t=fill:enable=${en}${out}`);
+    } else {
+      // crop w/h are fixed at config time, so a blurred region can move but not resize:
+      // take the largest keyframe size, rounded up to even for yuv420p chroma
+      const W = even(Math.max(...b.kfs.map(k => k.w)));
+      const H = even(Math.max(...b.kfs.map(k => k.h)));
+      const pos = (k, lim) => esc(`2*floor(max(0,min(${lim},${expr(b,k)}))/2)`);
+      const fx = b.mode === 'blur'
+        ? `boxblur=${b.strength}:1`
+        : `scale=${Math.max(1,Math.round(W/b.strength))}:${Math.max(1,Math.round(H/b.strength))}`
+          + `,scale=${W}:${H}:flags=neighbor`;
+      parts.push(`${cur}split[m${i}][c${i}]`);
+      parts.push(`[c${i}]crop=${W}:${H}:${pos('x','in_w-out_w')}:${pos('y','in_h-out_h')},${fx}[b${i}]`);
+      parts.push(`[m${i}][b${i}]overlay=${pos('x','main_w-overlay_w')}:${pos('y','main_h-overlay_h')}`
+               + `:enable=${en}${out}`);
+    }
+    cur = out;
+  });
+  return parts.join(';');
+}
+
+/* ---------- §6 string index and matching ---------- */
+
+// trim, collapse internal whitespace, casefold, strip surrounding punctuation
+function normalize(s) {
+  return String(s).trim().replace(/\s+/g, ' ')
+    .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')
+    .toLowerCase();
+}
+
+// Levenshtein, early-out once every cell in a row exceeds `cap`
+function lev(a, b, cap = Infinity) {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > cap) return cap + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j-1] + 1, prev[j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+      if (cur[j] < best) best = cur[j];
+    }
+    if (best > cap) return cap + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+const fuzzTol = q => Math.max(1, Math.floor(q.length / 8));
+
+// group occurrences by normalised text; count desc, then first appearance
+function buildIndex(lines) {
+  const m = new Map();
+  lines.forEach((l, i) => {
+    const n = normalize(l.text);
+    if (!n) return;
+    let g = m.get(n);
+    if (!g) m.set(n, g = { norm:n, count:0, first:l.t, last:l.t, raws:new Map(), idx:[] });
+    g.count++; g.idx.push(i);
+    g.first = Math.min(g.first, l.t); g.last = Math.max(g.last, l.t);
+    g.raws.set(l.text, (g.raws.get(l.text) || 0) + 1);
+  });
+  const out = [...m.values()].map(g => ({
+    norm:g.norm, count:g.count, first:g.first, last:g.last, idx:g.idx,
+    // "the raw text as most commonly OCR'd"
+    raw:[...g.raws.entries()].sort((a,b) => b[1]-a[1])[0][0],
+  }));
+  out.sort((a,b) => b.count - a.count || a.first - b.first);
+  return out;
+}
+
+/* Cluster near-identical strings so one OCR reading and its drifted variants ("Hauptstrasse 14",
+   "Hauptstrasse 1A", "Hauptstrasse l4") are one row to tick, not three. Greedy: each string
+   joins the closest existing group within tolerance, else starts one. The index arrives sorted
+   by count, so the representative of a group is its most-read spelling. */
+const groupTol = n => Math.max(2, Math.floor(n / 6));
+
+function groupStrings(index) {
+  const groups = [];
+  for (const g of index) {
+    let best = null, bestD = Infinity;
+    for (const grp of groups) {
+      const tol = groupTol(Math.max(g.norm.length, grp.norm.length));
+      if (Math.abs(g.norm.length - grp.norm.length) > tol) continue;
+      const d = lev(g.norm, grp.norm, tol);
+      if (d <= tol && d < bestD) { bestD = d; best = grp; }
+    }
+    if (best) {
+      best.members.push(g);
+      best.count += g.count;
+      best.first = Math.min(best.first, g.first);
+      best.last = Math.max(best.last, g.last);
+    } else {
+      groups.push({ norm:g.norm, raw:g.raw, members:[g],
+                    count:g.count, first:g.first, last:g.last });
+    }
+  }
+  groups.sort((a,b) => b.count - a.count || a.first - b.first);
+  return groups;
+}
+
+const rectsUnion = rs => {
+  const x = Math.min(...rs.map(r => r[0])), y = Math.min(...rs.map(r => r[1]));
+  return [x, y, Math.max(...rs.map(r => r[0]+r[2])) - x, Math.max(...rs.map(r => r[1]+r[3])) - y];
+};
+
+/* The rect of just the words that form the match, not the whole OCR line.
+
+   Windows OCR groups nearby words into one OcrLine, so a line can carry text either side of
+   what you selected — a postcode, the next column, or a second visual row when line spacing is
+   tight or the frame is mid-scroll. Redacting the line rect then paints a bar far taller and
+   wider than the text you picked. Falls back to the line rect when no run of words contains the
+   selection (fuzzy and regex hits, mostly). */
+function matchRect(line, q) {
+  const ws = line.words || [];
+  if (!q || ws.length < 2) return line.rect;
+  const norms = ws.map(w => normalize(w.text));
+  let best = null;
+  for (let i = 0; i < ws.length; i++) {
+    let acc = '';
+    for (let j = i; j < ws.length; j++) {
+      acc = acc ? acc + ' ' + norms[j] : norms[j];
+      if (acc.includes(q)) {
+        if (!best || j - i < best[1] - best[0]) best = [i, j];
+        break;                                   // shortest run starting at i
+      }
+    }
+  }
+  return best ? rectsUnion(ws.slice(best[0], best[1] + 1).map(w => w.rect)) : line.rect;
+}
+
+// -> [{i, t, rect, text, kind}] ; kind: exact | substr | fuzzy | regex
+function matchLines(lines, query, opts) {
+  const q = normalize(query);
+  let re = null;
+  if (opts.regex) { try { re = new RegExp(opts.regex, 'i'); } catch (_) { re = null; } }
+  const hits = [];
+  lines.forEach((l, i) => {
+    const n = normalize(l.text);
+    let kind = null;
+    if (q && opts.exact && n === q) kind = 'exact';
+    else if (q && opts.substr && n.includes(q)) kind = 'substr';
+    else if (q && opts.fuzzy && q.length >= 6 && lev(n, q, fuzzTol(q)) <= fuzzTol(q)) kind = 'fuzzy';
+    else if (re && re.test(l.text)) kind = 'regex';
+    if (!kind) return;
+    const r = (kind === 'exact' || kind === 'substr') ? matchRect(l, q) : l.rect;
+    hits.push({ i, t:l.t, rect:r.slice(), text:l.text, kind, line:l.rect.slice() });
+  });
+  return hits;
+}
+
+// §8 false-negative surface: close to the selection, but not matched
+function nearMisses(lines, query, hits) {
+  const q = normalize(query);
+  if (!q) return [];
+  const got = new Set(hits.map(h => h.i));
+  const out = [];
+  lines.forEach((l, i) => {
+    if (got.has(i)) return;
+    const n = normalize(l.text);
+    if (!n) return;
+    const d = lev(n, q, 3);
+    if (d <= 3) out.push({ i, t:l.t, rect:l.rect.slice(), text:l.text, dist:d });
+  });
+  return out.sort((a,b) => a.dist - b.dist || a.t - b.t);
+}
+
+/* ---------- §7 occurrence -> track ---------- */
+
+const R = r => ({ x:r[0], y:r[1], w:r[2], h:r[3] });
+function iou(a, b) {
+  const x = Math.max(0, Math.min(a.x+a.w, b.x+b.w) - Math.max(a.x, b.x));
+  const y = Math.max(0, Math.min(a.y+a.h, b.y+b.h) - Math.max(a.y, b.y));
+  const i = x * y, u = a.w*a.h + b.w*b.h - i;
+  return u <= 0 ? 0 : i / u;
+}
+/* Is `r` where the track could plausibly have got to by now?
+
+   One circular radius of max(w,h) is the wrong shape twice over. A text line is wide and short,
+   so using its WIDTH as the vertical tolerance lets a 150 px wide name match another copy of
+   itself 150 px above — in a scrolling chat, a different message. And a fixed radius ignores
+   time, so it is both too generous after one frame and too mean after a dropout.
+
+   So: allow where the track was heading (its own measured speed times the elapsed time), plus a
+   line-sized margin. A steady scroll stays one track through a dropout; a jump to an unrelated
+   copy does not. */
+function reachable(r, tr, t) {
+  const dtq = Math.max(0, t - tr.lastT);
+  const dx = Math.abs((r.x + r.w/2) - (tr.last.x + tr.last.w/2));
+  const dy = Math.abs((r.y + r.h/2) - (tr.last.y + tr.last.h/2));
+  return dx <= Math.abs(tr.vx) * dtq + Math.max(r.w, tr.last.w) * 0.75
+      && dy <= Math.abs(tr.vy) * dtq + Math.max(r.h, tr.last.h) * 1.5;
+}
+
+/* Greedy nearest-first assignment, one occurrence per track per frame.
+
+   `maxStale` stops a track that has not been seen for a while from adopting whatever drifts into
+   its last known position later — in a scrolling list that is a different appearance of the same
+   text, and merging the two produces a box spanning everything between them. */
+function clusterTracks(occs, maxStale = Infinity) {
+  const byT = new Map();
+  for (const o of occs) {
+    const k = o.t.toFixed(4);
+    if (!byT.has(k)) byT.set(k, []);
+    byT.get(k).push(o);
+  }
+  const frames = [...byT.entries()].sort((a,b) => +a[0] - +b[0]).map(e => e[1]);
+  const tracks = [];
+  for (const frame of frames) {
+    const pairs = [];
+    const nowT = frame[0].t;
+    frame.forEach((o, oi) => {
+      const r = R(o.rect);
+      tracks.forEach((tr, ti) => {
+        const v = iou(r, tr.last);
+        // Gone longer than the bridge window: only an essentially identical rect resumes it. A
+        // caption that blinks back on in the same spot is the same caption; something merely
+        // near where it used to be, in a scrolling list, is not.
+        if (nowT - tr.lastT > maxStale) { if (v >= 0.5) pairs.push({ oi, ti, s:v }); return; }
+        if (v >= 0.3) pairs.push({ oi, ti, s:v });
+        else if (reachable(r, tr, nowT)) pairs.push({ oi, ti, s:0.001 });
+      });
+    });
+    pairs.sort((a,b) => b.s - a.s);
+    const usedO = new Set(), usedT = new Set();
+    for (const p of pairs) {
+      if (usedO.has(p.oi) || usedT.has(p.ti)) continue;
+      usedO.add(p.oi); usedT.add(p.ti);
+      const o = frame[p.oi];
+      const tr = tracks[p.ti], prev = tr.last, prevT = tr.lastT, cur = R(o.rect);
+      const span = o.t - prevT;
+      if (span > 0) {                       // measured speed, used to predict across dropouts
+        tr.vx = (cur.x - prev.x) / span;
+        tr.vy = (cur.y - prev.y) / span;
+      }
+      tr.occs.push(o); tr.last = cur; tr.lastT = o.t;
+    }
+    frame.forEach((o, oi) => {
+      if (usedO.has(oi)) return;
+      tracks.push({ occs:[o], last:R(o.rect), lastT:o.t, vx:0, vy:0 });
+    });
+  }
+  return tracks;
+}
+
+const clampRect = (r, W, H) => {
+  const x = clamp(r.x, 0, W), y = clamp(r.y, 0, H);
+  return { x, y, w: clamp(r.w, 1, W - x), h: clamp(r.h, 1, H - y) };
+};
+// smallest rect covering both
+function coverBoth(a, b, W, H) {
+  const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+  return clampRect({ x, y,
+    w: Math.max(a.x + a.w, b.x + b.w) - x,
+    h: Math.max(a.y + a.h, b.y + b.h) - y }, W, H);
+}
+
+/* Across a sampling gap the editor lerps in a straight line between the rects either side —
+   a path the text never took if it was turning, accelerating or shaking. Hold the rect that
+   covers both ends for the whole gap instead. Over-covering costs a few pixels; under-covering
+   is a disclosure.
+
+   The same applies at the two span edges: the span is padded by one sampling interval (§7.4),
+   and a box that sits still through that padding lets moving text walk out from under it. Carry
+   the last known velocity forward and cover where the text is heading. */
+function coverGaps(kfs, spans, dt, W, H, step) {
+  if (!kfs.length) return kfs;
+  const EPS = Math.min(dt / 4, 0.004);
+  const out = [];
+  for (let i = 0; i < kfs.length; i++) {
+    out.push(kfs[i]);
+    const n = kfs[i + 1];
+    if (!n || n.t - kfs[i].t <= dt * 1.5 + 1e-9) continue;
+    const u = coverBoth(kfs[i], n, W, H);
+    /* If holding one rect across the gap would balloon the box — the text scrolled a long way
+       while OCR was not reading it — walk it across in sampling-interval steps instead. Each
+       step still covers its own interval, so nothing is exposed, but the box stays the size of
+       the text rather than spanning everywhere it has been. */
+    const tall = u.h > Math.max(kfs[i].h, n.h) * 2 || u.w > Math.max(kfs[i].w, n.w) * 2;
+    const steps = tall ? Math.max(2, Math.round((n.t - kfs[i].t) / dt)) : 1;
+    if (steps === 1) {
+      out.push({ ...u, t: +(kfs[i].t + EPS).toFixed(4) });
+      out.push({ ...u, t: +(n.t - EPS).toFixed(4) });
+      continue;
+    }
+    const lerpRect = f => clampRect({
+      x: kfs[i].x + (n.x - kfs[i].x) * f, y: kfs[i].y + (n.y - kfs[i].y) * f,
+      w: kfs[i].w + (n.w - kfs[i].w) * f, h: kfs[i].h + (n.h - kfs[i].h) * f }, W, H);
+    for (let j = 0; j < steps; j++) {
+      const a = lerpRect(j / steps), b = lerpRect((j + 1) / steps);
+      const t = j === 0 ? +(kfs[i].t + EPS).toFixed(4)
+                        : +(kfs[i].t + (n.t - kfs[i].t) * j / steps).toFixed(4);
+      out.push({ ...coverBoth(a, b, W, H), t });
+    }
+  }
+  // extrapolate one sampling interval past each end, into the span padding
+  const edge = (a, b, t) => {
+    if (!b || a.t === b.t) return { ...a, t };
+    const s = Math.abs(t - a.t) / Math.abs(a.t - b.t);
+    return { ...coverBoth(a, clampRect({
+      x: a.x + (a.x - b.x) * s, y: a.y + (a.y - b.y) * s, w: a.w, h: a.h }, W, H), W, H), t };
+  };
+  const first = out[0], lastK = out[out.length - 1];
+  const lo = Math.min(...spans.map(s => s.s)), hi = Math.max(...spans.map(s => s.e));
+  if (lo < first.t) out.unshift(edge(first, out[1], +lo.toFixed(4)));
+  if (hi > lastK.t) {
+    const e = edge(lastK, out[out.length - 2], +hi.toFixed(4));
+    /* A stepped track holds the LAST keyframe from its own time onward, so a keyframe appended
+       at the end of the span would never be reached — the tail padding has to be baked into the
+       last reading instead. */
+    if (step) out[out.length - 1] = { ...e, t: lastK.t };
+    else out.push(e);
+  }
+  return out;
+}
+
+/* Douglas–Peucker over (t -> x,y,w,h). A pan produces one keyframe per sampled frame that all
+   sit on the same straight line; keeping them bloats the filtergraph and slows every frame
+   ffmpeg renders. `tol` is in pixels and stays well under the box padding, so simplification
+   can never expose text that the unsimplified track covered. */
+function simplify(kfs, tol, step) {
+  if (kfs.length <= 2 || tol <= 0) return kfs.slice();
+  /* A step track holds each keyframe until the next, so a keyframe sitting on the straight line
+     between its neighbours is NOT redundant — dropping it would hold the wrong rect. Only drop
+     keyframes that repeat what is already held. */
+  if (step) {
+    const out = [kfs[0]];
+    for (let i = 1; i < kfs.length - 1; i++) {
+      const p = out[out.length-1], c = kfs[i];
+      if (['x','y','w','h'].some(k => Math.abs(c[k] - p[k]) > tol)) out.push(c);
+    }
+    out.push(kfs[kfs.length-1]);
+    return out;
+  }
+  const K = ['x', 'y', 'w', 'h'];
+  const keep = new Uint8Array(kfs.length);
+  keep[0] = keep[kfs.length - 1] = 1;
+  const stack = [[0, kfs.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop();
+    if (b - a < 2) continue;
+    const span = kfs[b].t - kfs[a].t;
+    let worst = -1, wi = -1;
+    for (let i = a + 1; i < b; i++) {
+      const f = span <= 0 ? 0 : (kfs[i].t - kfs[a].t) / span;
+      let d = 0;
+      for (const k of K) d = Math.max(d, Math.abs(kfs[i][k] - (kfs[a][k] + (kfs[b][k] - kfs[a][k]) * f)));
+      if (d > worst) { worst = d; wi = i; }
+    }
+    if (worst > tol) { keep[wi] = 1; stack.push([a, wi], [wi, b]); }
+  }
+  return kfs.filter((_, i) => keep[i]);
+}
+
+function mergeSpans(spans) {
+  const s = [...spans].sort((a,b) => a.s - b.s), out = [];
+  for (const x of s) {
+    const p = out[out.length-1];
+    if (p && x.s <= p.e) p.e = Math.max(p.e, x.e); else out.push({ ...x });
+  }
+  return out;
+}
+
+/* ffmpeg's expression evaluator has a budget of ~100 operations, and a flat sum spends it
+   exactly as fast as nesting does: measured on ffmpeg 8, 98 summed terms parse and 99 do not
+   ("Failed to configure input pad"). No expression shape escapes that, so a track with more
+   keyframes than fit has to be emitted as several boxes, each active over its own slice of
+   time. Consecutive chunks share their boundary keyframe, so the box is continuous across the
+   seam. */
+const EXPR_TERMS = 88;
+
+function chunkTrack(box, limit = EXPR_TERMS) {
+  const k = sorted(box);
+  if (k.length <= limit) return [box];
+  const out = [];
+  for (let i = 0; i < k.length - 1; i += limit - 1) {
+    const j = Math.min(i + limit - 1, k.length - 1);
+    const lo = i === 0 ? -Infinity : k[i].t;
+    const hi = j === k.length - 1 ? Infinity : k[j].t;
+    const spans = box.spans
+      .map(s => ({ s: Math.max(s.s, lo), e: Math.min(s.e, hi) }))
+      .filter(s => s.e > s.s);
+    if (!spans.length) continue;
+    out.push({ ...box, spans, kfs: k.slice(i, j + 1),
+               gen: box.gen ? { ...box.gen, part: out.length + 1 } : undefined });
+  }
+  return out.length ? out : [box];
+}
+
+/* occs: [{t, rect:[x,y,w,h], kind, text}]  ->  boxes in the editor's model.
+   opts: {rate, duration, W, H, gapBridge, padPx, mode, strength, color} */
+function toTracks(occs, opts) {
+  const dt = 1 / opts.rate;
+  /* Bridging is measured in SECONDS, not samples. Counting samples ties the bridged window to
+     the sampling rate, so raising the rate to match the video shrinks it — at 2 fps three
+     samples is 1.5 s, at 30 fps it is 0.1 s. Sampling faster would then split a span that used
+     to hold, switch the box off mid-dropout and expose the text: exactly backwards. */
+  const GAP = Math.max(opts.gapBridgeSec ?? 0.5, dt);
+  const PAD = opts.padPx ?? 6;
+  const D = opts.duration, W = opts.W, H = opts.H;
+  const sortedOccs = [...occs].sort((a,b) => a.t - b.t);
+
+  return clusterTracks(sortedOccs, GAP).flatMap(tr => {
+    const os = tr.occs.sort((a,b) => a.t - b.t);
+
+    // 3. bridge gaps <= GAP, otherwise close the span
+    const raw = [];
+    let s = os[0].t, prev = os[0].t;
+    for (let i = 1; i < os.length; i++) {
+      if (os[i].t - prev <= GAP + 1e-9) { prev = os[i].t; continue; }
+      raw.push({ s, e:prev }); s = os[i].t; prev = os[i].t;
+    }
+    raw.push({ s, e:prev });
+
+    // 4. pad by one sampling interval — frames between samples were never OCR'd
+    const spans = mergeSpans(raw.map(sp => ({
+      s: clamp(sp.s - dt, 0, D), e: clamp(sp.e + dt, 0, D),
+    })));
+
+    // 5. one keyframe per occurrence, rect padded and clamped, then made safe across gaps and
+    //    span edges, then thinned of keyframes that sit on a straight line anyway
+    const step = (opts.interp ?? 'step') === 'step';
+    const raw_kfs = os.map(o => {
+      const r = R(o.rect);
+      return { t:+o.t.toFixed(4),
+               ...clampRect({ x:r.x - PAD, y:r.y - PAD, w:r.w + 2*PAD, h:r.h + 2*PAD }, W, H) };
+    });
+    /* A stepped rect is held for the whole sampling interval. When that interval is longer than
+       one video frame there are frames in it that were never read, so the held rect has to cover
+       where the text gets to by the next reading. Sampling at the video's own rate — the default
+       — measures every frame, so nothing is widened. */
+    const vfps = opts.videoFps || opts.rate;
+    if (step && dt > 1.5 / vfps)
+      for (let i = 0; i < raw_kfs.length - 1; i++)
+        raw_kfs[i] = { ...coverBoth(raw_kfs[i], raw_kfs[i+1], W, H), t: raw_kfs[i].t };
+    const kfs = simplify(coverGaps(raw_kfs, spans, dt, W, H, step), opts.simplifyPx ?? 1, step);
+
+    // bridged gaps longer than one sampling interval are worth reporting (§8)
+    const gaps = [];
+    for (let i = 1; i < os.length; i++) {
+      const g = os[i].t - os[i-1].t;
+      if (g > dt + 1e-9 && g <= GAP + 1e-9) gaps.push({ from:os[i-1].t, to:os[i].t, len:+g.toFixed(3) });
+    }
+
+    const areas = os.map(o => Math.max(1, o.rect[2] * o.rect[3]));
+    const varied = Math.max(...areas) / Math.min(...areas) > 2;
+
+    return chunkTrack({ id:0, mode:opts.mode || 'pixelate', color:opts.color || 'black',
+                        strength:opts.strength ?? 12, interp: step ? 'step' : 'linear',
+                        spans, kfs, gen:{ occs:os, gaps, varied } });
+  });
+}
+
+/* ---------- §10 hash guard ---------- */
+// -> null if the project may be applied, otherwise the reason it may not
+function hashGuard(project, info) {
+  if (!project || !project.video_sha256) return null;   // pre-hash project, nothing to check
+  if (!info || !info.sha256) return 'no video loaded to check the project hash against';
+  if (project.video_sha256 !== info.sha256)
+    return `project was made against ${project.video || 'another file'} `
+         + `(sha256 ${project.video_sha256.slice(0,12)}…), loaded video hashes `
+         + `${info.sha256.slice(0,12)}…. Boxes are coordinates and timestamps; applying them to `
+         + `the wrong file is a silent, serious error. Refusing.`;
+  return null;
+}
+
+/* ---------- self check ---------- */
+function selfTest() {
+  const ok = (c, m, got) => { if (!c) throw new Error(`selfTest ${m}: ${got}`); };
+
+  /* --- ported checks, unchanged --- */
+  const b = { mode:'black', color:'black', spans:[{s:0,e:9}], kfs:[
+    {t:0,x:10,y:0,w:50,h:20}, {t:2,x:30,y:0,w:50,h:20} ] };
+  ok(expr(b,'w') === '50', 'constant track must collapse', expr(b,'w'));
+  ok(Math.round(at(b,1,'x')) === 20, 'midpoint interp', at(b,1,'x'));
+  ok(Math.round(at(b,5,'x')) === 30, 'hold after last kf', at(b,5,'x'));
+
+  /* The preview interpolates in JS, the export interpolates in ffmpeg. Nothing forces those to
+     agree unless it is checked, and a disagreement shows up as text peeking out from under a
+     box in the exported file only. Evaluate the emitted expression and compare. */
+  const agrees = (box, key, lo, hi) => {
+    const e = expr(box, key);
+    for (let t = lo; t <= hi; t += 0.017) {
+      if (Math.abs(evalExpr(e, +t.toFixed(4)) - at(box, t, key)) > 1.0) return t;
+    }
+    return -1;
+  };
+  for (const key of ['x','y','w','h'])
+    ok(agrees(b, key, -1, 6) === -1, `emitted ${key} must match the preview`, agrees(b, key, -1, 6));
+  ok(!expr(b,'x').includes('if('), 'no nested if(): ffmpeg gives up at ~100 levels', expr(b,'x'));
+
+  // a keyframe per frame of a moving box: flat, deep-nesting-free, and still exact
+  const many = { mode:'black', color:'black', spans:[{s:0,e:10}],
+    kfs: Array.from({length:300}, (_,i) => ({ t:+(i/30).toFixed(4), x:100+i*3, y:300, w:460, h:48 })) };
+  ok(agrees(many, 'x', 0, 10) === -1, 'dense track matches the preview', agrees(many,'x',0,10));
+  ok(simplify(many.kfs, 1).length === 2, 'a straight line collapses to two keyframes',
+     simplify(many.kfs, 1).length);
+  ok(graph([b]).includes('between(t\\,0\\,9)'), 'commas escaped', graph([b]));
+  const g = { ...b, spans:[{s:0,e:2},{s:5,e:9}] };
+  ok(graph([g]).includes('between(t\\,0\\,2)+between(t\\,5\\,9)'), 'spans OR-ed', graph([g]));
+  ok(!visible(g,3) && visible(g,6), 'gap hides the box');
+
+  const bl = graph([{ ...b, mode:'blur', strength:12 }]);
+  ok(/split\[m0\]\[c0\];\[c0\]crop=50:20:.*boxblur=12:1\[b0\];\[m0\]\[b0\]overlay=/.test(bl), 'blur chain', bl);
+  const px = graph([{ ...b, mode:'pixelate', strength:10 }]);
+  ok(px.includes('scale=5:2,scale=50:20:flags=neighbor'), 'pixelate chain', px);
+  // two boxes must be labelled through, last one unlabelled
+  const two = graph([b, { ...b, mode:'blur', strength:8 }]);
+  ok(two.includes('[v0]split') && !two.includes('[v1]'), 'chain labels', two);
+
+  /* --- §6 index and matching --- */
+  ok(normalize('  Haupt   STRASSE 14. ') === 'haupt strasse 14', 'normalize', normalize('  Haupt   STRASSE 14. '));
+  ok(lev('kitten','sitting') === 3, 'lev', lev('kitten','sitting'));
+  ok(lev('kitten','sitting',1) === 2, 'lev cap early-out returns > cap', lev('kitten','sitting',1));
+  const L = [
+    { t:0.0, text:'Hauptstrasse 14', rect:[10,10,100,20] },
+    { t:0.5, text:'hauptstrasse 14', rect:[10,10,100,20] },
+    { t:1.0, text:'Hauptstrasse 1A', rect:[10,10,100,20] },   // OCR drift
+    { t:1.5, text:'Nebenweg 9',      rect:[10,10,100,20] },
+  ];
+  const ix = buildIndex(L);
+  ok(ix[0].norm === 'hauptstrasse 14' && ix[0].count === 2, 'index groups + counts desc', JSON.stringify(ix[0]));
+  ok(ix[0].first === 0 && ix[0].last === 0.5, 'index first/last', JSON.stringify(ix[0]));
+  const opt = { exact:true, substr:true, fuzzy:true, regex:'' };
+  const h = matchLines(L, 'Hauptstrasse 14', opt);
+  ok(h.length === 3, 'fuzzy catches OCR drift', JSON.stringify(h.map(x=>x.kind)));
+  ok(h[2].kind === 'fuzzy', 'drifted hit flagged fuzzy', h[2].kind);
+  ok(matchLines(L, 'Hauptstrasse 14', { ...opt, fuzzy:false }).length === 2, 'fuzzy off', 0);
+  ok(matchLines(L, '', { ...opt, regex:'^Neben' }).length === 1, 'regex mode', 0);
+  /* The box must cover the words you picked, not everything OCR lumped into the line. */
+  const wl = [{ t:0, text:'Hauptstrasse 14 8001 Zuerich', rect:[10,10,400,20], words:[
+    { text:'Hauptstrasse', rect:[10,10,150,20] }, { text:'14', rect:[170,10,30,20] },
+    { text:'8001', rect:[210,10,60,20] }, { text:'Zuerich', rect:[280,10,130,20] } ] }];
+  ok(JSON.stringify(matchRect(wl[0], 'hauptstrasse 14')) === JSON.stringify([10,10,190,20]),
+     'rect covers only the matched words', JSON.stringify(matchRect(wl[0],'hauptstrasse 14')));
+  ok(JSON.stringify(matchRect(wl[0], '8001')) === JSON.stringify([210,10,60,20]),
+     'a mid-line match does not drag in its neighbours', JSON.stringify(matchRect(wl[0],'8001')));
+  ok(JSON.stringify(matchRect(wl[0], 'nothing here')) === JSON.stringify([10,10,400,20]),
+     'falls back to the line rect when no run matches', 0);
+  ok(JSON.stringify(matchLines(wl, 'Hauptstrasse 14', opt)[0].rect) === JSON.stringify([10,10,190,20]),
+     'matchLines uses the word rect', JSON.stringify(matchLines(wl,'Hauptstrasse 14',opt)[0].rect));
+
+  const nm = nearMisses(L, 'Hauptstrasse 14', matchLines(L, 'Hauptstrasse 14', { ...opt, fuzzy:false }));
+  ok(nm.length === 1 && nm[0].t === 1.0, 'near-miss surfaces the unmatched drift', JSON.stringify(nm));
+
+  // OCR drift collapses into one row to tick; unrelated text stays its own group
+  const gs = groupStrings(buildIndex([...L, { t:2, text:'Hauptstrasse l4', rect:[10,10,100,20] }]));
+  ok(gs.length === 2, 'drift variants group together', JSON.stringify(gs.map(g => g.members.length)));
+  ok(gs[0].members.length === 3 && gs[0].count === 4, 'group counts every occurrence',
+     JSON.stringify({ m:gs[0].members.length, c:gs[0].count }));
+  ok(gs[0].raw === 'Hauptstrasse 14', 'group shows the most common spelling', gs[0].raw);
+  ok(gs[1].norm === 'nebenweg 9', 'unrelated text is its own group', gs[1].norm);
+
+  /* --- §7 / acceptance test 3: span padding --- */
+  const O = t => ({ t, rect:[100,100,50,20], kind:'exact', text:'x' });
+  const base = { rate:2, videoFps:30, duration:20, W:1920, H:1080, gapBridgeSec:1.5, padPx:6 };
+  let tr = toTracks([4.0,4.5,5.0,5.5,6.0].map(O), base);
+  ok(tr.length === 1, 'one track', tr.length);
+  ok(tr[0].spans.length === 1, 'one span', JSON.stringify(tr[0].spans));
+  ok(tr[0].spans[0].s <= 4.0 && tr[0].spans[0].e >= 6.0,
+     'span must never start after / end before the text', JSON.stringify(tr[0].spans[0]));
+  ok(tr[0].spans[0].s === 3.5 && tr[0].spans[0].e === 6.5, 'span padded by exactly dt', JSON.stringify(tr[0].spans[0]));
+  ok(tr[0].kfs[0].x === 94 && tr[0].kfs[0].w === 62, 'kf padded by padPx', JSON.stringify(tr[0].kfs[0]));
+
+  /* Generated boxes step between readings rather than sliding: OCR measured a rect on a frame,
+     and the emitted filtergraph must hold exactly that, not something in between. */
+  ok(tr[0].interp === 'step', 'generated boxes step by default', tr[0].interp);
+  const jump = { interp:'step', spans:[{s:0,e:9}], mode:'black', color:'black',
+                 kfs:[{t:0,x:10,y:0,w:50,h:20},{t:2,x:30,y:0,w:50,h:20}] };
+  ok(at(jump, 1, 'x') === 10, 'step holds the reading until the next one', at(jump,1,'x'));
+  ok(at(jump, 2, 'x') === 30, 'step takes the next reading at its own time', at(jump,2,'x'));
+  ok(!expr(jump,'x').includes('(t-'), 'stepped expr has no ramp', expr(jump,'x'));
+  for (const key of ['x','w'])
+    ok(agrees(jump, key, -1, 6) === -1, `stepped ${key} must match the preview`, agrees(jump,key,-1,6));
+  // and a stepped track must not be thinned as if it were a line
+  const ramp = Array.from({length:5}, (_,i) => ({ t:i, x:i*10, y:0, w:50, h:20 }));
+  ok(simplify(ramp, 1, true).length === 5, 'step keeps every distinct reading', simplify(ramp,1,true).length);
+  ok(simplify(ramp, 1, false).length === 2, 'linear collapses a straight ramp', simplify(ramp,1,false).length);
+
+  /* Coverage across a gap: text that moves and is missed by OCR in the middle must stay covered.
+     A straight lerp between the two ends would walk the box off the text if it turned. */
+  const VX = 20;                                   // px/s — slow enough to stay one track
+  const moving = [0, 0.5, 2.0, 2.5].map(t => ({ t, kind:'exact', text:'x',
+    rect:[100 + t*VX, 100, 50, 20] }));            // 1.5 s hole in the middle
+  const tracks = toTracks(moving, { ...base, simplifyPx:0 });
+  ok(tracks.length === 1, 'moving text stays one track', tracks.length);
+  const gt = tracks[0];
+  const covered = (t) => {
+    const r = rectAt(gt, t);                       // what the box does
+    const tx = 100 + t*VX;                         // where the text actually is
+    return r.x <= tx && r.x + r.w >= tx + 50 && r.y <= 100 && r.y + r.h >= 120;
+  };
+  for (let t = 0; t <= 2.5; t += 0.05)
+    ok(covered(+t.toFixed(2)), `box must cover the text across a bridged gap at ${t.toFixed(2)}s`,
+       JSON.stringify(rectAt(gt, t)));
+  // and through the padded span edges, where the box used to sit still while the text moved on
+  ok(covered(gt.spans[0].s + 0.01) && covered(gt.spans[0].e - 0.01),
+     'box must cover the text inside the padded span edges', JSON.stringify(gt.spans[0]));
+
+  // clamped at the head of the video and to the frame
+  const c = toTracks([0, 0.5].map(O), base);
+  ok(c[0].spans[0].s === 0, 'span clamped to 0', c[0].spans[0].s);
+  const edge = toTracks([{ t:1, rect:[0,0,1920,1080], kind:'exact', text:'x' }], base);
+  ok(edge[0].kfs[0].x === 0 && edge[0].kfs[0].w === 1920, 'kf clamped to frame', JSON.stringify(edge[0].kfs[0]));
+
+  /* --- acceptance test 4: gap bridging (1 s hole, GAP = 1.5 s) --- */
+  tr = toTracks([2.0,2.5,3.0,  4.0,4.5,5.0].map(O), base);
+  ok(tr.length === 1 && tr[0].spans.length === 1, 'gap <= bridge window stays one span', JSON.stringify(tr[0].spans));
+  ok(tr[0].gen.gaps.length === 1 && tr[0].gen.gaps[0].len === 1, 'gap reported', JSON.stringify(tr[0].gen.gaps));
+  // a larger gap closes the span and opens a new one in the same track
+  tr = toTracks([2.0,2.5,  9.0,9.5].map(O), base);
+  ok(tr.length === 1 && tr[0].spans.length === 2, 'gap > bridge window splits the span', JSON.stringify(tr[0].spans));
+  // the window is in seconds, so sampling faster must not shrink it (this used to expose text)
+  const fast = { ...base, rate:30, gapBridgeSec:0.5 };
+  const dense = []; for (let i = 0; i <= 300; i++) { const t = +(i/30).toFixed(4);
+    if (t > 4.0 && t < 4.4) continue; dense.push({ t, rect:[100,100,50,20], kind:'exact', text:'x' }); }
+  const dt2 = toTracks(dense, fast);
+  ok(dt2.length === 1 && dt2[0].spans.length === 1,
+     'a 0.4 s dropout at 30 fps stays one span', JSON.stringify(dt2[0].spans));
+
+  /* --- acceptance test 5: spatial clustering --- */
+  const twoPlaces = [
+    { t:1.0, rect:[100,100,50,20], kind:'exact', text:'x' },
+    { t:1.0, rect:[800,600,50,20], kind:'exact', text:'x' },
+    { t:1.5, rect:[102,100,50,20], kind:'exact', text:'x' },
+    { t:1.5, rect:[798,600,50,20], kind:'exact', text:'x' },
+  ];
+  tr = toTracks(twoPlaces, base);
+  ok(tr.length === 2, 'same string at two positions -> two tracks', tr.length);
+  ok(tr[0].gen.occs.length === 2 && tr[1].gen.occs.length === 2, 'each track keeps both frames',
+     tr.map(x => x.gen.occs.length).join('/'));
+  // moving text stays one track
+  tr = toTracks([0,1,2,3].map((i) => ({ t:i*0.5, rect:[100+i*30,100,50,20], kind:'exact', text:'x' })), base);
+  ok(tr.length === 1, 'panning text stays one track', tr.length);
+
+  /* A scrolling chat: the same name on several messages, all moving up together, and OCR
+     drops one of them for a stretch. The stale copy must not adopt the message below it —
+     that merge is what paints a bar spanning everything between the two. */
+  const scroll = [];
+  const NAMES_Y = [200, 400, 600];
+  for (let f = 0; f <= 60; f++) {
+    const t = +(f/30).toFixed(4);
+    for (const y0 of NAMES_Y) {
+      const y = y0 - f * 4;                       // scrolls up 4 px per frame
+      if (y0 === 400 && f > 10 && f < 25) continue;   // OCR loses the middle one
+      if (y < 0) continue;
+      scroll.push({ t, rect:[100, y, 150, 22], kind:'exact', text:'Veronika' });
+    }
+  }
+  const st = toTracks(scroll, { rate:30, videoFps:30, duration:5, W:1280, H:720,
+                                gapBridgeSec:0.5, padPx:6 });
+  ok(st.length === NAMES_Y.length, 'each message keeps its own box', st.length);
+  const tallest = Math.max(...st.flatMap(t => t.kfs.map(k => k.h)));
+  ok(tallest <= 22 + 2*6 + 4, 'no box balloons to span two messages', tallest);
+  // and the one OCR lost is still covered while it was missing
+  const mid = st.find(t => Math.abs(t.kfs[0].y - (400 - 6)) < 8);
+  ok(!!mid, 'the interrupted message is one track', st.map(t => t.kfs[0].y).join('/'));
+  const covers = t => { const r = rectAt(mid, t), y = 400 - (t*30)*4;
+                        return r.y <= y && r.y + r.h >= y + 22; };
+  for (let f = 0; f <= 60; f++) ok(covers(+(f/30).toFixed(4)),
+    `interrupted message stays covered at frame ${f}`, JSON.stringify(rectAt(mid, f/30)));
+
+  /* ffmpeg rejects an expression with more than ~98 summed terms, so a long track has to be
+     split into several boxes — and the split must not leave a frame uncovered. */
+  const longOccs = Array.from({length:300}, (_,i) =>
+    ({ t:+(i/30).toFixed(4), rect:[100 + i*3, 200, 150, 22], kind:'exact', text:'x' }));
+  const parts = toTracks(longOccs, { rate:30, videoFps:30, duration:10, W:1280, H:720,
+                                     gapBridgeSec:0.5, padPx:6, simplifyPx:0 });
+  ok(parts.length > 1, 'a long track is split into several boxes', parts.length);
+  ok(parts.every(b => b.kfs.length <= 88), 'every box fits ffmpeg\'s expression budget',
+     parts.map(b => b.kfs.length).join('/'));
+  ok(parts.every(b => expr(b,'x').split('+').length <= 98), 'emitted terms stay under the limit',
+     Math.max(...parts.map(b => expr(b,'x').split('+').length)));
+  // continuous across every seam: some box must cover the text at every frame
+  const coveredBy = t => parts.some(b => {
+    if (!visible(b, t)) return false;
+    const r = rectAt(b, t), tx = 100 + (t*30)*3;
+    return r.x <= tx + 0.01 && r.x + r.w >= tx + 150 - 0.01;
+  });
+  for (let i = 0; i < 300; i++)
+    ok(coveredBy(+(i/30).toFixed(4)), `boxes must abut without a hole at frame ${i}`, i);
+
+  // 2x area variation is flagged (§7.7)
+  tr = toTracks([{ t:1, rect:[100,100,50,20], kind:'e', text:'x' },
+                 { t:1.5, rect:[100,100,300,60], kind:'e', text:'x' }], base);
+  ok(tr[0].gen.varied === true, 'area variation warned', JSON.stringify(tr[0].gen));
+
+  // generated boxes must survive graph() unchanged
+  const gen = toTracks([4.0,4.5].map(O), { ...base, mode:'pixelate', strength:12 })[0];
+  ok(graph([gen]).includes('flags=neighbor'), 'generated box emits a filtergraph', graph([gen]));
+
+  /* --- acceptance test 7: hash guard --- */
+  ok(hashGuard({ video_sha256:'aa', video:'a.mp4' }, { sha256:'aa' }) === null, 'same hash passes');
+  ok(typeof hashGuard({ video_sha256:'aa', video:'a.mp4' }, { sha256:'bb' }) === 'string',
+     'different hash refused');
+  ok(hashGuard({ boxes:[] }, { sha256:'aa' }) === null, 'legacy project without a hash is allowed');
+
+  return true;
+}
+
+if (typeof module !== 'undefined') module.exports = {
+  at, rectAt, visible, expr, evalExpr, graph, normalize, lev, buildIndex, matchLines,
+  nearMisses, toTracks, clusterTracks, mergeSpans, hashGuard, groupStrings, simplify,
+  matchRect, selfTest,
+};
+/* ==================== PURE END ==================== */
+selfTest();
+
+/* ==================== app ==================== */
+const T = window.__TAURI__;
+const IS_TAURI = !!T;
+const invoke = (c, a) => T.core.invoke(c, a);
+const listen = (e, f) => T.event.listen(e, f);
+
+const $ = id => document.getElementById(id);
+const vid = $('vid'), cv = $('cv'), ctx = cv.getContext('2d');
+const seek = $('seek'), play = $('play'), stage = $('stage');
+
+let boxes = [], sel = null, nextId = 1;
+let info = null;               // VideoInfo from probe()
+let videoPath = null;
+let ocr = null;                // OcrResult
+let index = [], groups = [];   // deduped strings, and their near-duplicate clusters
+let checked = new Set();       // normalised strings ticked for redaction
+let expanded = new Set();      // expanded group keys
+let gen = null;                // {hits, dropped, misses, tracks, queries}
+let hitIdx = 0, peekUntil = 0, projectPath = null, lastExport = null;
+let tab = 'hits';
+
+const now = () => +vid.currentTime.toFixed(3);
+/* window.alert is swallowed and window.confirm returns true without asking in this webview,
+   so neither can carry a message or gate a destructive action. */
+let toastT = 0;
+function say(msg, kind) {
+  const el = $('toast');
+  el.className = kind || '';
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout(toastT);
+  toastT = setTimeout(() => { el.hidden = true; }, kind === 'err' ? 8000 : 4000);
+}
+function ask(msg) {
+  return new Promise(res => {
+    $('modal-msg').textContent = msg;
+    $('modal').hidden = false;
+    const done = v => { $('modal').hidden = true; res(v); };
+    $('modal-yes').onclick = () => done(true);
+    $('modal-no').onclick = () => done(false);
+  });
+}
+const err = e => { console.error(e); say(String(e && e.message || e), 'err'); };
+const esc2 = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+function putKf(b, t, r) {
+  const e = b.kfs.find(k => Math.abs(k.t - t) < 0.001);
+  if (e) Object.assign(e, r); else b.kfs.push({ t, ...r });
+  render();
+}
+
+/* ---------- canvas ---------- */
+const scale = () => vid.clientWidth / (vid.videoWidth || 1);
+const toVid = e => { const r = cv.getBoundingClientRect(), s = scale();
+                     return { x:(e.clientX-r.left)/s, y:(e.clientY-r.top)/s }; };
+
+function draw() {
+  const s = scale();
+  if (cv.width !== cv.clientWidth) { cv.width = cv.clientWidth; cv.height = cv.clientHeight; }
+  ctx.clearRect(0,0,cv.width,cv.height);
+  const t = vid.currentTime;
+  const peeking = performance.now() < peekUntil;
+  $('peek').hidden = !peeking;
+  if (!peeking) for (const b of boxes) {
+    if (!visible(b, t)) continue;
+    const r = rectAt(b, t);
+    if (b.mode === 'black') {
+      ctx.fillStyle = b.color;
+      ctx.fillRect(r.x*s, r.y*s, r.w*s, r.h*s);
+    } else {
+      ctx.save();
+      ctx.beginPath(); ctx.rect(r.x*s, r.y*s, r.w*s, r.h*s); ctx.clip();
+      ctx.filter = `blur(${Math.max(1, b.strength*s)}px)`;
+      ctx.drawImage(vid, 0, 0, cv.width, cv.height);
+      ctx.restore(); ctx.filter = 'none';
+    }
+    if (b === sel) {
+      ctx.strokeStyle = '#ffb454'; ctx.lineWidth = 2;
+      ctx.strokeRect(r.x*s, r.y*s, r.w*s, r.h*s);
+      ctx.fillStyle = '#ffb454'; ctx.fillRect(r.x*s+r.w*s-8, r.y*s+r.h*s-8, 8, 8);
+    }
+  }
+  const h = gen && gen.hits[hitIdx];
+  if (h && Math.abs(h.t - t) < 0.4) {
+    ctx.strokeStyle = '#c678dd'; ctx.setLineDash([4,3]); ctx.lineWidth = 1;
+    ctx.strokeRect(h.rect[0]*s, h.rect[1]*s, h.rect[2]*s, h.rect[3]*s); ctx.setLineDash([]);
+  }
+  $('clock').textContent = t.toFixed(2) + ' s';
+  if (document.activeElement !== seek) seek.value = t;
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+/* ---------- drawing boxes by hand ---------- */
+let drag = null;
+function hitTest(p) {
+  const t = now(), s = scale();
+  for (const b of [...boxes].reverse()) {
+    if (!visible(b, t)) continue;
+    const r = rectAt(b, t);
+    if (p.x >= r.x && p.x <= r.x+r.w && p.y >= r.y && p.y <= r.y+r.h)
+      return { b, r, corner: p.x > r.x+r.w-10/s && p.y > r.y+r.h-10/s };
+  }
+  return null;
+}
+cv.addEventListener('pointerdown', e => {
+  if (!vid.videoWidth) return;
+  cv.setPointerCapture(e.pointerId);
+  const p = toVid(e), t = now(), hit = hitTest(p);
+  if (hit) {
+    sel = hit.b; render();
+    drag = { b:hit.b, t, mode: hit.corner ? 'size' : 'move',
+             ox:p.x-hit.r.x, oy:p.y-hit.r.y, r:hit.r };
+    return;
+  }
+  const b = { id:nextId++, mode:$('genmode').value, color:'black', strength:12, interp:'linear',
+              spans:[{ s:0, e:+vid.duration.toFixed(3) }],
+              kfs:[{ t, x:p.x, y:p.y, w:1, h:1 }] };
+  boxes.push(b); sel = b; render();
+  drag = { b, t, mode:'new', ox:p.x, oy:p.y };
+});
+cv.addEventListener('pointermove', e => {
+  if (!drag) { const h = hitTest(toVid(e));
+               cv.style.cursor = !h ? 'crosshair' : h.corner ? 'nwse-resize' : 'move'; return; }
+  const p = toVid(e), W = vid.videoWidth, H = vid.videoHeight;
+  let r;
+  if (drag.mode === 'new')
+    r = { x:Math.min(p.x,drag.ox), y:Math.min(p.y,drag.oy),
+          w:Math.abs(p.x-drag.ox), h:Math.abs(p.y-drag.oy) };
+  else if (drag.mode === 'size')
+    r = { ...drag.r, w:clamp(p.x-drag.r.x,4,W), h:clamp(p.y-drag.r.y,4,H) };
+  else
+    r = { ...drag.r, x:clamp(p.x-drag.ox,0,W-drag.r.w), y:clamp(p.y-drag.oy,0,H-drag.r.h) };
+  putKf(drag.b, drag.t, r);
+});
+cv.addEventListener('pointerup', () => {
+  if (drag && drag.mode === 'new' && (drag.b.kfs[0].w < 4 || drag.b.kfs[0].h < 4)) {
+    boxes = boxes.filter(b => b !== drag.b); sel = null;
+  }
+  drag = null; render();
+});
+
+/* ---------- boxes panel ---------- */
+function render() {
+  const list = $('list');
+  list.innerHTML = '';
+  $('empty').hidden = boxes.length > 0;
+  $('nbox').textContent = boxes.length || '';
+  boxes.forEach((b,i) => {
+    const d = document.createElement('div');
+    d.className = 'box-item' + (b === sel ? ' sel' : '');
+    const label = b.gen ? b.gen.query : 'hand-drawn';
+    d.innerHTML = `<span class="tw"></span><span class="hint">${b.mode.slice(0,3)}</span>`;
+    d.querySelector('.tw').textContent = `#${i+1} ${label}`;
+    d.title = `${label} — ${b.kfs.length} keyframes, ${b.spans.length} range(s)`;
+    d.onclick = () => { sel = b; render(); };
+    list.appendChild(d);
+  });
+
+  $('nosel').hidden = !!sel;
+  $('selbody').hidden = !sel;
+  $('selname').textContent = sel ? (sel.gen ? sel.gen.query : 'hand-drawn') : '';
+  if (sel) {
+    $('bc').value = sel.color; $('bmode').value = sel.mode; $('bstr').value = sel.strength;
+    $('binterp').value = sel.interp || 'linear';
+    $('bc').hidden = sel.mode !== 'black';
+    $('bstr').hidden = sel.mode === 'black';
+    $('bwarn').innerHTML = (sel.gen && sel.gen.varied && sel.mode !== 'black')
+      ? '<span class="warn">this box changes size a lot; blur and pixelate use one fixed size '
+        + '(the largest). Split it, or use a black bar.</span>' : '';
+
+    const sp = $('spans');
+    sp.innerHTML = '';
+    sel.spans.sort((a,b) => a.s - b.s).forEach(s => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      for (const k of ['s','e']) {
+        const inp = document.createElement('input');
+        inp.type = 'number'; inp.step = '0.01'; inp.value = s[k]; inp.style.width = '66px';
+        inp.oninput = () => { s[k] = +inp.value; render(); };
+        const set = document.createElement('button');
+        set.textContent = '⌖'; set.title = 'set from playhead';
+        set.onclick = () => { s[k] = now(); render(); };
+        row.append(inp, set);
+      }
+      const x = document.createElement('span');
+      x.className = 'x'; x.textContent = '×';
+      x.onclick = () => { sel.spans = sel.spans.filter(q => q !== s); render(); };
+      row.appendChild(x);
+      sp.appendChild(row);
+    });
+
+    const kf = $('kfs');
+    kf.innerHTML = '';
+    $('nkf').textContent = sel.kfs.length;
+    sorted(sel).forEach(k => {
+      const d = document.createElement('div');
+      d.className = 'kf';
+      d.innerHTML = `<b>${k.t.toFixed(2)}s</b> ${Math.round(k.x)},${Math.round(k.y)} `
+                  + `${Math.round(k.w)}×${Math.round(k.h)}`;
+      d.querySelector('b').onclick = () => vid.currentTime = k.t;
+      const x = document.createElement('span');
+      x.className = 'x'; x.textContent = '×';
+      x.onclick = () => { if (sel.kfs.length > 1) { sel.kfs = sel.kfs.filter(q => q !== k); render(); } };
+      d.appendChild(x); kf.appendChild(d);
+    });
+  }
+  drawStrings();
+}
+
+/* ---------- transport ---------- */
+function fit() {
+  if (!vid.videoWidth) return;
+  const maxH = window.innerHeight * 0.42;
+  stage.style.width = Math.min(vid.videoWidth, stage.parentElement.clientWidth - 20,
+                               maxH * vid.videoWidth / vid.videoHeight) + 'px';
+}
+addEventListener('resize', fit);
+play.onclick = () => vid.paused ? vid.play() : vid.pause();
+vid.onplay = () => play.textContent = '❚❚';
+vid.onpause = () => play.textContent = '▶';
+seek.oninput = () => vid.currentTime = +seek.value;
+const step = d => vid.currentTime = clamp(vid.currentTime + d/(+$('fps').value||25), 0, vid.duration);
+$('prev').onclick = () => step(-1);
+$('next').onclick = () => step(1);
+$('bc').onchange = e => { sel.color = e.target.value; render(); };
+$('bmode').onchange = e => { sel.mode = e.target.value; render(); };
+$('bstr').oninput = e => { sel.strength = +e.target.value || 12; render(); };
+$('binterp').onchange = e => { sel.interp = e.target.value; render(); };
+$('addspan').onclick = () => { sel.spans.push({ s: now(), e: +vid.duration.toFixed(3) }); render(); };
+$('cut').onclick = () => {
+  const t = now(), d = 1 / (+$('fps').value || 25);
+  const s = sel.spans.find(q => t >= q.s && t <= q.e);
+  if (!s) return;
+  const tail = { s: +(t + d).toFixed(3), e: s.e };
+  s.e = +(t - d).toFixed(3);
+  if (tail.e > tail.s) sel.spans.push(tail);
+  sel.spans = sel.spans.filter(q => q.e > q.s);
+  render();
+};
+$('addkf').onclick = () => putKf(sel, now(), rectAt(sel, vid.currentTime));
+const deleteSel = () => { if (!sel) return; boxes = boxes.filter(b => b !== sel); sel = null; render(); };
+$('del').onclick = deleteSel;
+$('delall').onclick = async () => {
+  if (!boxes.length) return;
+  if (!await ask(`Remove all ${boxes.length} boxes?`)) return;
+  boxes = []; sel = null; gen = null; render(); drawCheck();
+};
+$('allmode').onchange = e => {
+  const m = e.target.value;
+  if (!m) return;
+  for (const b of boxes) b.mode = m;
+  e.target.value = '';
+  render();
+};
+$('reset').onclick = async () => {
+  if (!await ask('Reset the project?\n\nBoxes and the OCR result are discarded. '
+      + 'The video stays open.')) return;
+  boxes = []; sel = null; gen = null; ocr = null; index = []; groups = [];
+  checked.clear(); expanded.clear(); projectPath = null; lastExport = null;
+  $('fname').textContent = 'unsaved'; $('ocrstat').textContent = '';
+  $('genstat').textContent = ''; $('expstat').textContent = '';
+  $('rx').disabled = true; $('rx').value = '';
+  render(); drawCheck();
+};
+addEventListener('keydown', e => {
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
+  if (e.code === 'Space' && !typing) { e.preventDefault(); play.onclick(); }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && sel) { e.preventDefault(); deleteSel(); }
+  if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('save').onclick(); }
+});
+
+/* ---------- video ---------- */
+async function loadVideo(path) {
+  try {
+    info = await invoke('probe', { path });
+    videoPath = path;
+    vid.src = T.core.convertFileSrc(path);
+    vid.dataset.name = path.split(/[\\/]/).pop();
+    $('vinfo').textContent = `${vid.dataset.name} · ${info.width}×${info.height} · `
+      + `${info.duration.toFixed(1)}s · ${info.fps.toFixed(2)} fps · sha256 ${info.sha256.slice(0,10)}…`;
+    const fps = Math.max(1, Math.round(info.fps || 25));
+    $('fps').value = fps;
+    // Sample at the video's own rate by default: anything slower leaves frames no one looked at.
+    $('rate').value = fps;
+    vid.onloadedmetadata = () => { seek.max = vid.duration; fit(); render(); };
+    ocr = null; index = []; groups = []; checked.clear(); gen = null;
+    $('rx').disabled = true;
+    render(); drawCheck();
+  } catch (e) { err(e); }
+}
+$('pick').onclick = async () => {
+  const p = await invoke('pick_video');
+  if (p) await loadVideo(p);
+};
+
+/* ---------- OCR ---------- */
+async function fillLangs() {
+  if (!IS_TAURI) return;
+  try {
+    const ls = await invoke('ocr_languages');
+    const s = $('lang');
+    s.innerHTML = '';
+    if (!ls.length) {
+      s.innerHTML = '<option>no OCR language installed</option>';
+      $('ocrstat').innerHTML = '<span class="err">No Windows OCR language pack installed. '
+        + 'Settings &gt; Time &amp; language &gt; Language.</span>';
+      return;
+    }
+    for (const l of ls) s.add(new Option(l, l));
+    const pref = ls.find(l => l.startsWith('de')) || ls.find(l => l.startsWith('en'));
+    if (pref) s.value = pref;
+  } catch (e) { err(e); }
+}
+fillLangs();
+
+if (IS_TAURI) {
+  listen('ocr://progress', e => {
+    const { done, total } = e.payload;
+    $('ocrprog').value = total ? done/total : 0;
+    $('ocrstat').textContent = `${done} / ${total} frames`;
+  });
+  listen('export://progress', e => {
+    $('expprog').value = e.payload;
+    $('expstat').textContent = `rendering… ${Math.round(e.payload*100)}%`;
+  });
+}
+
+$('runocr').onclick = async () => {
+  if (!videoPath) return say('open a video first', 'err');
+  $('ocrprog').hidden = false; $('ocrprog').value = 0;
+  $('runocr').disabled = true; $('cancelocr').hidden = false;
+  try {
+    ocr = await invoke('ocr_video', { path: videoPath, rate: +$('rate').value || 2, lang: $('lang').value });
+    index = buildIndex(ocr.lines);
+    groups = groupStrings(index);
+    checked.clear(); expanded.clear();
+    $('rx').disabled = false;
+    $('ocrstat').innerHTML = `<span class="good">${ocr.lines.length} readings · ${index.length} distinct`
+      + ` · ${groups.length} groups</span> · ${ocr.lang}`
+      + (ocr.ocr_scale < 1 ? ` · <span class="warn">downscaled ×${ocr.ocr_scale.toFixed(2)}</span>` : '');
+    gen = null; render(); drawCheck();
+  } catch (e) { $('ocrstat').innerHTML = `<span class="err">${esc2(e)}</span>`; }
+  $('runocr').disabled = false; $('cancelocr').hidden = true; $('ocrprog').hidden = true;
+};
+$('cancelocr').onclick = () => invoke('ocr_cancel');
+
+/* ---------- string list ---------- */
+const generatedQueries = () => new Set(boxes.filter(b => b.gen).map(b => b.gen.query));
+
+function shownGroups() {
+  const f = normalize($('filter').value);
+  let re = null;
+  const rx = $('rx').value.trim();
+  if (rx) { try { re = new RegExp(rx, 'i'); } catch (_) { re = null; } }
+  const keepStr = g => (!f || g.norm.includes(f)) && (!re || re.test(g.raw));
+  const out = [];
+  for (const grp of groups) {
+    const members = grp.members.filter(keepStr);
+    if (members.length) out.push({ ...grp, members });
+  }
+  return { out, re, rx };
+}
+
+$('filter').oninput = () => drawStrings();
+$('rx').oninput = () => drawStrings();
+
+function drawStrings() {
+  const el = $('strings');
+  if (!el) return;
+  const { out, re, rx } = shownGroups();
+  const total = index.length;
+  const showing = out.reduce((n,g) => n + g.members.length, 0);
+  $('nstr').textContent = total ? `${showing}/${total}` : '';
+  $('rxstat').innerHTML = !rx ? (index.length ? '' :
+      '<span class="hint">run the read step first</span>')
+    : re ? `<span class="good">regex matches ${showing} of ${total} strings — the list below is filtered to them</span>`
+         : '<span class="err">not a valid regex</span>';
+
+  const done = generatedQueries();
+  el.innerHTML = '';
+  for (const grp of out) {
+    const many = grp.members.length > 1;
+    const key = grp.norm;
+    const open = expanded.has(key);
+    const allOn = grp.members.every(m => checked.has(m.norm));
+    const someOn = !allOn && grp.members.some(m => checked.has(m.norm));
+    const hasBox = grp.members.some(m => done.has(m.raw));
+
+    const head = document.createElement('div');
+    head.className = 'grp-head';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = allOn; cb.indeterminate = someOn;
+    cb.onclick = ev => {
+      ev.stopPropagation();
+      for (const m of grp.members) allOn ? checked.delete(m.norm) : checked.add(m.norm);
+      drawStrings();
+    };
+    const caret = document.createElement('span');
+    caret.className = 'caret'; caret.textContent = many ? (open ? '▾' : '▸') : '';
+    const tw = document.createElement('span');
+    tw.className = 'tw'; tw.textContent = grp.raw; tw.title = grp.raw;
+    const cnt = document.createElement('span');
+    cnt.className = 'cnt'; cnt.textContent = `${grp.count}×` + (many ? ` (${grp.members.length})` : '');
+    const ts = document.createElement('span');
+    ts.className = 'ts'; ts.textContent = `${grp.first.toFixed(1)}–${grp.last.toFixed(1)}s`;
+    head.append(cb, caret, tw);
+    if (hasBox) { const d = document.createElement('span'); d.className = 'done';
+                  d.textContent = '●'; d.title = 'already has boxes'; head.append(d); }
+    head.append(cnt, ts);
+    head.onclick = () => {
+      if (many) { open ? expanded.delete(key) : expanded.add(key); drawStrings(); }
+      else { checked.has(grp.norm) ? checked.delete(grp.norm) : checked.add(grp.norm); drawStrings(); }
+    };
+    el.appendChild(head);
+
+    if (many && open) for (const m of grp.members) {
+      const row = document.createElement('div');
+      row.className = 'mem';
+      const mb = document.createElement('input');
+      mb.type = 'checkbox'; mb.checked = checked.has(m.norm);
+      mb.onclick = ev => { ev.stopPropagation();
+        checked.has(m.norm) ? checked.delete(m.norm) : checked.add(m.norm); drawStrings(); };
+      const mt = document.createElement('span');
+      mt.className = 'tw'; mt.textContent = m.raw; mt.title = m.raw;
+      const mc = document.createElement('span');
+      mc.className = 'cnt'; mc.textContent = `${m.count}×`;
+      row.append(mb, mt);
+      if (done.has(m.raw)) { const d = document.createElement('span'); d.className = 'done';
+                            d.textContent = '●'; row.append(d); }
+      row.append(mc);
+      row.onclick = () => mb.onclick(new Event('click'));
+      el.appendChild(row);
+    }
+  }
+  const n = checked.size;
+  $('gen').textContent = n ? `hide ${n} selected` : 'hide selected';
+  $('gen').disabled = !n;
+}
+$('selall').onclick = () => { for (const g of shownGroups().out) for (const m of g.members) checked.add(m.norm); drawStrings(); };
+$('selnone').onclick = () => { checked.clear(); drawStrings(); };
+
+/* ---------- generate ---------- */
+$('gen').onclick = () => {
+  if (!ocr) return say('read the video first', 'err');
+  const queries = index.filter(g => checked.has(g.norm)).map(g => g.raw);
+  if (!queries.length) return;
+  const opt = { exact:true, substr:true, fuzzy:true, regex:'' };
+  const hits = [], misses = [], seen = new Set();
+  for (const q of queries) {
+    for (const h of matchLines(ocr.lines, q, opt)) {
+      if (seen.has(h.i)) continue;           // one box per reading, even if two strings match it
+      seen.add(h.i);
+      hits.push({ ...h, q });
+    }
+  }
+  for (const q of queries)
+    for (const m of nearMisses(ocr.lines, q, hits))
+      if (!seen.has(m.i) && !misses.some(x => x.i === m.i)) misses.push({ ...m, q });
+  if (!hits.length) return say('none of the selected text was matched', 'err');
+  gen = { queries, hits, dropped:new Set(), misses };
+  rebuild();
+  hitIdx = 0; gotoHit(0);
+};
+
+function rebuild() {
+  const qs = new Set(gen.queries);
+  boxes = boxes.filter(b => !b.gen || !qs.has(b.gen.query));
+  const live = gen.hits.filter((_,i) => !gen.dropped.has(i));
+  const byQ = new Map();
+  for (const h of live) { if (!byQ.has(h.q)) byQ.set(h.q, []); byQ.get(h.q).push(h); }
+  const tracks = [];
+  for (const [q, hs] of byQ) {
+    for (const t of toTracks(hs, {
+      rate: ocr.rate, duration: info.duration, W: info.width, H: info.height,
+      gapBridgeSec: +$('gapSec').value, padPx: +$('padPx').value,
+      videoFps: info.fps, interp: $('interp').value,
+      mode: $('genmode').value, strength: 12,
+    })) { t.id = nextId++; t.gen.query = q; tracks.push(t); }
+  }
+  gen.tracks = tracks;
+  boxes.push(...tracks);
+  sel = tracks[0] || null;
+  $('genstat').innerHTML = `<span class="good">${live.length} readings → ${tracks.length} boxes`
+    + `</span> across ${gen.queries.length} string(s)`
+    + (gen.dropped.size ? ` · ${gen.dropped.size} dropped` : '');
+  render(); drawCheck();
+}
+$('gapSec').onchange = $('padPx').onchange = $('genmode').onchange = $('interp').onchange =
+  () => { if (gen) rebuild(); };
+
+/* ---------- check ---------- */
+for (const b of document.querySelectorAll('.tab')) b.onclick = () => {
+  tab = b.dataset.tab;
+  for (const o of document.querySelectorAll('.tab')) o.classList.toggle('on', o === b);
+  drawCheck();
+};
+
+function drawCheck() {
+  const on = t => { const p = $('pane-'+t); p.hidden = tab !== t;
+                    p.style.display = tab === t ? 'flex' : 'none'; };
+  on('hits'); on('gaps'); on('miss');
+  $('verify').disabled = !lastExport;
+  if (!gen) {
+    $('checkn').textContent = '';
+    $('hitn').textContent = 'nothing generated yet';
+    $('hitinfo').textContent = '';
+    $('gaplist').innerHTML = '<span class="hint">nothing generated yet</span>';
+    $('misslist').innerHTML = '<span class="hint">nothing generated yet</span>';
+    return;
+  }
+  let ngap = 0;
+  for (const t of gen.tracks) ngap += t.gen.gaps.length;
+  $('checkn').textContent = `${gen.hits.length} hits · ${ngap} guessed · ${gen.misses.length} almost`;
+  $('tab-gaps').textContent = `guessed stretches (${ngap})`;
+  $('tab-miss').textContent = `almost matched (${gen.misses.length})`;
+
+  const h = gen.hits[hitIdx];
+  $('hitn').textContent = `${hitIdx+1} / ${gen.hits.length}`;
+  $('hitinfo').innerHTML = h
+    ? `<span class="tag ${h.kind}">${h.kind}</span> at ${h.t.toFixed(2)}s — OCR read this line as `
+      + `<b>${esc2(h.text)}</b>`
+      + (h.line && (h.rect[2] < h.line[2] - 1 || h.rect[3] < h.line[3] - 1)
+         ? ` <span class="hint">(box covers only the matched words, `
+           + `${Math.round(h.rect[2])}×${Math.round(h.rect[3])} of `
+           + `${Math.round(h.line[2])}×${Math.round(h.line[3])})</span>` : '')
+      + (gen.dropped.has(hitIdx) ? ' <span class="tag dropped">dropped</span>' : '')
+    : '';
+  $('hdrop').textContent = gen.dropped.has(hitIdx) ? 'put it back' : 'drop this one';
+
+  const gl = $('gaplist'); gl.innerHTML = '';
+  gen.tracks.forEach((t, i) => t.gen.gaps.forEach(g => {
+    const d = document.createElement('div');
+    d.className = 'kf';
+    d.innerHTML = `<b>${g.from.toFixed(2)} → ${g.to.toFixed(2)}s</b> `
+                + `<span class="${g.len > 4/ocr.rate ? 'warn' : 'hint'}">${g.len.toFixed(2)}s guessed</span>`;
+    const q = document.createElement('span');
+    q.className = 'hint'; q.style.marginLeft = 'auto'; q.textContent = t.gen.query;
+    d.querySelector('b').onclick = () => { sel = t; vid.currentTime = g.from; render(); };
+    d.appendChild(q); gl.appendChild(d);
+  }));
+  if (!gl.children.length) gl.innerHTML = '<span class="good">none — OCR saw the text on every '
+    + 'sampled frame it appears in</span>';
+
+  const ml = $('misslist'); ml.innerHTML = '';
+  if (!gen.misses.length) ml.innerHTML = '<span class="good">none close enough to worry about</span>';
+  for (const m of gen.misses.slice(0, 300)) {
+    const d = document.createElement('div');
+    d.className = 'kf';
+    d.innerHTML = `<b>${m.t.toFixed(2)}s</b>`;
+    const s = document.createElement('span');
+    s.className = 'tw'; s.textContent = m.text; s.title = `${m.dist} character(s) different from "${m.q}"`;
+    d.append(s);
+    d.querySelector('b').onclick = () => vid.currentTime = m.t;
+    const add = document.createElement('button');
+    add.textContent = 'this is it too';
+    add.onclick = () => {
+      gen.hits.push({ ...m, kind:'fuzzy' });
+      gen.misses = gen.misses.filter(x => x !== m);
+      gen.hits.sort((a,b) => a.t - b.t);
+      rebuild();
+    };
+    d.appendChild(add); ml.appendChild(d);
+  }
+}
+
+function gotoHit(i) {
+  if (!gen || !gen.hits.length) return;
+  hitIdx = (i + gen.hits.length) % gen.hits.length;
+  const h = gen.hits[hitIdx];
+  vid.currentTime = h.t;
+  const tr = gen.tracks.find(t => t.gen.query === h.q
+                                  && t.gen.occs.some(o => o.i === h.i));
+  if (tr) sel = tr;
+  render(); drawCheck();
+}
+$('hprev').onclick = () => gotoHit(hitIdx - 1);
+$('hnext').onclick = () => gotoHit(hitIdx + 1);
+$('hdrop').onclick = () => {
+  if (!gen) return;
+  gen.dropped.has(hitIdx) ? gen.dropped.delete(hitIdx) : gen.dropped.add(hitIdx);
+  rebuild();
+};
+function curSpan() {
+  const t = now();
+  for (const b of (sel ? [sel] : boxes))
+    for (const s of b.spans) if (t >= s.s - 1e-6 && t <= s.e + 1e-6) return s;
+  return null;
+}
+const peekAt = t => { vid.currentTime = clamp(t, 0, info ? info.duration : vid.duration);
+                      peekUntil = performance.now() + 2500; };
+$('peekb').onclick = () => { const s = curSpan(); if (s) peekAt(s.s - 1/(+$('fps').value||25)); };
+$('peeka').onclick = () => { const s = curSpan(); if (s) peekAt(s.e + 1/(+$('fps').value||25)); };
+
+/* ---------- export ---------- */
+$('export').onclick = async () => {
+  if (!videoPath) return say('open a video first', 'err');
+  if (!boxes.length) return say('no boxes to apply', 'err');
+  if (gen && !await ask('Generated redactions are proposals, not results.\n\n'
+      + `${gen.hits.length} hits · ${gen.misses.length} almost-matched · `
+      + `${gen.tracks.reduce((n,t)=>n+t.gen.gaps.length,0)} guessed stretches\n\n`
+      + 'Have you stepped through them? The almost-matched list is where a leak hides.')) return;
+  const out = await invoke('pick_save',
+    { name: (vid.dataset.name||'out').replace(/\.\w+$/,'') + '.redacted.mp4' });
+  if (!out) return;
+  $('expprog').hidden = false; $('expprog').value = 0; $('export').disabled = true;
+  try {
+    const rep = await invoke('export', {
+      path: videoPath, filtergraph: graph(boxes), out,
+      meta: {
+        tool: 'AutoBlur', ocr_engine: ocr ? ocr.engine : null, lang: ocr ? ocr.lang : null,
+        rate: ocr ? ocr.rate : null, ocr_scale: ocr ? ocr.ocr_scale : null,
+        redacted_strings: gen ? gen.queries : [],
+        bridge_seconds: +$('gapSec').value, margin_px: +$('padPx').value,
+        boxes: boxes.map(b => ({ mode:b.mode, strength:b.strength, generated: !!b.gen,
+                                 query: b.gen ? b.gen.query : null,
+                                 spans:b.spans.length, keyframes:b.kfs.length,
+                                 guessed_stretches: b.gen ? b.gen.gaps.length : 0 })),
+        note: 'Output is a derivative exhibit: re-encoded, not a bit-exact copy of the input.',
+      },
+    });
+    lastExport = { path: out, strings: gen ? gen.queries : [] };
+    $('expstat').innerHTML = `<span class="good">wrote ${esc2(out.split(/[\\/]/).pop())}</span>`
+      + ` · log written · sha256 ${rep.output_sha256.slice(0,10)}…`;
+    $('done-path').textContent = out;
+    $('done-info').innerHTML = `${boxes.length} box(es) applied · sha256 `
+      + `${rep.output_sha256.slice(0,16)}…<br><span class="hint">A `
+      + `<b>${esc2(out.split(/[\\/]/).pop())}.redaction-log.json</b> sidecar next to it records `
+      + `the input hash, the exact ffmpeg command and every redacted string.</span>`;
+    $('done-stat').textContent = '';
+    $('done-verify').disabled = !(gen && gen.queries.length);
+    $('done').hidden = false;
+  } catch (e) { $('expstat').innerHTML = `<span class="err">${esc2(e)}</span>`; }
+  $('export').disabled = false; $('expprog').hidden = true; drawCheck();
+};
+
+async function runVerify(report) {
+  if (!lastExport) return;
+  $('verify').disabled = true; $('done-verify').disabled = true;
+  report('re-reading the exported file…', '');
+  try {
+    const re = await invoke('ocr_video', { path: lastExport.path,
+      rate: ocr ? ocr.rate : +$('rate').value, lang: $('lang').value });
+    const opt = { exact:true, substr:true, fuzzy:true, regex:'' };
+    const fails = [];
+    for (const s of lastExport.strings) {
+      const h = matchLines(re.lines, s, opt);
+      if (h.length) fails.push({ s, n:h.length, first:h[0].t });
+    }
+    const pass = !fails.length;
+    report(pass
+      ? `<span class="good">VERIFIED — none of the ${lastExport.strings.length} redacted `
+        + `string(s) can be read in the output (${re.lines.length} readings checked)</span>`
+      : `<span class="err">STILL READABLE — ${fails.map(f => `"${esc2(f.s)}" ×${f.n} from `
+        + `${f.first.toFixed(2)}s`).join(', ')}</span>`, 'html');
+    await invoke('append_log', { path: lastExport.path + '.redaction-log.json',
+      key: 'verify', value: { pass, checked: lastExport.strings, failures: fails,
+                              lines_reocred: re.lines.length, rate: re.rate, lang: re.lang } });
+  } catch (e) { report(`<span class="err">${esc2(e)}</span>`, 'html'); }
+  $('verify').disabled = false; $('done-verify').disabled = false;
+}
+const intoStat = (msg, html) => { if (html) $('expstat').innerHTML = msg; else $('expstat').textContent = msg; };
+const intoDone = (msg, html) => { if (html) $('done-stat').innerHTML = msg; else $('done-stat').textContent = msg;
+                                  intoStat(msg, html); };
+$('verify').onclick = () => runVerify(intoStat);
+$('done-verify').onclick = () => runVerify(intoDone);
+$('done-close').onclick = () => { $('done').hidden = true; };
+$('done-folder').onclick = () => invoke('reveal', { path: lastExport.path, folder: true }).catch(err);
+$('done-open').onclick = () => invoke('reveal', { path: lastExport.path, folder: false }).catch(err);
+
+/* ---------- project files ---------- */
+const project = () => ({
+  video: vid.dataset.name || '', video_path: videoPath,
+  video_sha256: info ? info.sha256 : null,
+  ocr: ocr ? { video_sha256: ocr.video_sha256, rate: ocr.rate, video_fps: ocr.video_fps,
+               lang: ocr.lang, lines: ocr.lines,
+               engine: ocr.engine, width: ocr.width, height: ocr.height,
+               duration: ocr.duration, ocr_scale: ocr.ocr_scale, generated: ocr.generated } : null,
+  boxes: boxes.map(b => ({ ...b,
+    gen: b.gen ? { query:b.gen.query, gaps:b.gen.gaps, varied:b.gen.varied } : undefined })),
+});
+
+function applyProject(p) {
+  const why = hashGuard(p, info);
+  if (why) { say(why, 'err'); return; }
+  boxes = p.boxes || [];
+  for (const b of boxes) {
+    if (!b.spans) b.spans = [{ s:b.start ?? 0, e:b.end ?? 1e6 }];
+    b.mode ??= 'black'; b.strength ??= 12; b.color ??= 'black'; b.interp ??= 'linear';
+  }
+  ocr = null; index = []; groups = [];
+  if (p.ocr && info && p.ocr.video_sha256 === info.sha256) {
+    ocr = p.ocr; index = buildIndex(ocr.lines); groups = groupStrings(index); $('rx').disabled = false;
+  }
+  nextId = boxes.length + 1; sel = null; gen = null; checked.clear(); expanded.clear();
+  render(); drawCheck();
+  $('ocrstat').textContent = ocr
+    ? `${ocr.lines.length} readings reused from the project (${ocr.lang} @ ${ocr.rate} fps)`
+    : (p.ocr ? 'saved OCR discarded: it was made against a different video' : '');
+}
+function setName(n) { $('fname').textContent = n ? n.split(/[\\/]/).pop() : 'unsaved'; projectPath = n || null; }
+
+async function saveTo(p) {
+  await invoke('write_text', { path:p, text:JSON.stringify(project(), null, 1) });
+  setName(p); await invoke('push_recent', { path:p }); drawRecent();
+}
+async function loadFrom(p) {
+  try {
+    applyProject(JSON.parse(await invoke('read_text', { path:p })));
+    setName(p); await invoke('push_recent', { path:p }); drawRecent();
+  } catch (e) { err(e); }
+}
+$('save').onclick = async () => {
+  const p = projectPath || await invoke('pick_save', { name:'redact.json' });
+  if (p) await saveTo(p);
+};
+$('saveas').onclick = async () => {
+  const p = await invoke('pick_save', { name: projectPath || 'redact.json' });
+  if (p) await saveTo(p);
+};
+$('open').onclick = async () => {
+  const p = await invoke('pick_open', { name:'redact.json' });
+  if (p) await loadFrom(p);
+};
+async function drawRecent() {
+  const el = $('recent'); el.innerHTML = '';
+  let list = [];
+  try { list = await invoke('recents'); } catch (_) { return; }
+  for (const p of list.slice(0, 5)) {
+    const d = document.createElement('div');
+    d.className = 'kf';
+    d.innerHTML = '<b></b>';
+    d.querySelector('b').textContent = p.split(/[\\/]/).pop();
+    d.title = p;
+    d.querySelector('b').onclick = () => loadFrom(p);
+    const x = document.createElement('span');
+    x.className = 'x'; x.textContent = '×';
+    x.onclick = async () => { await invoke('drop_recent', { path:p }); drawRecent(); };
+    d.appendChild(x); el.appendChild(d);
+  }
+}
+if (IS_TAURI) drawRecent();
+render(); drawCheck();
+</script>

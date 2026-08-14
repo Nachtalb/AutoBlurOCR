@@ -1,0 +1,8 @@
+/src-tauri/target/
+/src-tauri/gen/
+/src-tauri/binaries/*.exe
+/src-tauri/binaries/ffmpeg
+/src-tauri/binaries/ffprobe
+*.redaction-log.json
+ocr.json
+/tools/node_modules/
