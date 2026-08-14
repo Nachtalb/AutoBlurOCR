@@ -15,6 +15,13 @@ tools/jstest.mjs          runs the frontend's self-test headlessly
 tools/gen-boxes.mjs       ocr.json + a string -> boxes.txt, using the app's own code
 ```
 
+The UI is English and German (`L` in the app section; static text carries `data-i18n`,
+`data-i18n-title` or `data-i18n-ph` and is swapped by `applyLang()`, anything built in JS goes
+through `tx()`). It has a simple and an advanced mode — simple sets `:root.simple`, which hides
+every `.adv` element, pins the OCR rate to the video's and the bridge to 0.2 s. Theme is
+`:root.light` over CSS variables, defaulting to the OS setting. All three persist in
+`localStorage`.
+
 `src/index.html` is split by `PURE START` / `PURE END` markers. Everything between them is
 DOM-free and is executed headlessly by `tools/*.mjs`. Keep it that way: it is the only reason the
 matching, tracking and filtergraph code can be tested without a browser.
@@ -60,6 +67,18 @@ fast as nesting does — measured on ffmpeg 8, 98 summed terms parse and 99 fail
 `Failed to configure input pad`. No expression shape escapes it, so a track with more keyframes
 than fit is emitted as several boxes, each active over its own slice of time and sharing boundary
 keyframes so there is no seam.
+
+**Every box is a filled `drawbox`; there is no blur and no pixelate.** They needed a split, a
+crop, two scales and an overlay per box, each running on every frame whether that box was enabled
+or not. With long tracks split into chunks it reached 0.0 fps — not slow, stopped. `drawbox` writes
+in place, chains with a plain comma and needs no stream labels, so any number of boxes stays one
+cheap pass. The box model has no `mode` or `strength` field any more; a project saved by an older
+build has them stripped on load.
+
+**Near misses are grouped by distinct reading before they are shown or counted.** The same
+misreading on 200 consecutive frames is one thing to judge. Ungrouped, a handful of near-identical
+chat names produced 846 rows, which is not a review surface, it is a wall — and the same number in
+the pre-export dialog reads as a catastrophe rather than a list.
 
 **Generated boxes step between readings; they do not interpolate.** OCR measured a rect on a
 specific frame, and sampling at the video's own rate means every frame has one. Sliding between

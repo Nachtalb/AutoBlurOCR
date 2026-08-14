@@ -2,20 +2,32 @@
 <meta charset="utf-8">
 <title>AutoBlur — OCR redaction</title>
 <style>
-  :root { --bg:#14161a; --panel:#1c1f26; --line:#2c313b; --fg:#e6e8ec; --dim:#8b93a3;
-          --acc:#ffb454; --bad:#e06c75; --ok:#98c379; --info:#61afef; --fuzz:#c678dd; }
+  /* Dark is the default; `.light` is set on <html> from the setting, which itself defaults to
+     following the OS. Everything below reads variables, so a theme is one class flip. */
+  :root { color-scheme:dark;
+          --bg:#14161a; --panel:#1c1f26; --line:#2c313b; --fg:#e6e8ec; --dim:#8b93a3;
+          --acc:#ffb454; --acc2:#ffc46e; --bad:#e06c75; --ok:#98c379; --info:#61afef;
+          --fuzz:#c678dd; --ctl:#252932; --code:#0f1115; --codefg:#9ecbff; --thumb:#3a4150;
+          --veil:#000b; --shadow:#0008; }
+  :root.light { color-scheme:light;
+          --bg:#f2f4f7; --panel:#ffffff; --line:#d5dae2; --fg:#161a21; --dim:#5c6673;
+          --acc:#a85800; --acc2:#8a4700; --bad:#c0392b; --ok:#2b7a2b; --info:#1a6ec0;
+          --fuzz:#8135ad; --ctl:#eceff4; --code:#f6f7fa; --codefg:#144a86; --thumb:#b6bdc9;
+          --veil:#0007; --shadow:#0003; }
   * { box-sizing:border-box; }
   /* inline display:flex on a pane would otherwise beat the hidden attribute */
   [hidden] { display:none !important; }
+  /* the simple workflow hides the parts that need explaining, not the parts that do the work */
+  :root.simple .adv { display:none !important; }
   html, body { height:100%; }
   body { margin:0; background:var(--bg); color:var(--fg); overflow:hidden;
          font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
 
-  /* scrollbars: the default light ones are jarring on this palette */
-  * { scrollbar-width:thin; scrollbar-color:#3a4150 transparent; }
+  /* scrollbars: the default ones are jarring on either palette */
+  * { scrollbar-width:thin; scrollbar-color:var(--thumb) transparent; }
   ::-webkit-scrollbar { width:9px; height:9px; }
   ::-webkit-scrollbar-track { background:transparent; }
-  ::-webkit-scrollbar-thumb { background:#3a4150; border-radius:5px;
+  ::-webkit-scrollbar-thumb { background:var(--thumb); border-radius:5px;
                               border:2px solid var(--panel); }
   ::-webkit-scrollbar-thumb:hover { background:var(--acc); }
   ::-webkit-scrollbar-corner { background:transparent; }
@@ -23,6 +35,7 @@
   header { height:38px; padding:0 12px; border-bottom:1px solid var(--line);
            display:flex; gap:10px; align-items:center; }
   h1 { font-size:13px; margin:0; font-weight:600; letter-spacing:.06em; color:var(--acc); }
+  header select { padding:2px 4px; }
 
   /* three columns, full height, nothing scrolls except designated panes */
   main { display:grid; grid-template-columns:300px minmax(0,1fr) 320px;
@@ -40,16 +53,17 @@
             justify-content:center; font-size:10px; margin-left:auto; }
   .scroll { overflow-y:auto; overflow-x:hidden; min-height:0; flex:1; }
 
-  button, input, select, textarea { background:#252932; color:var(--fg);
+  button, input, select, textarea { background:var(--ctl); color:var(--fg);
       border:1px solid var(--line); border-radius:4px; padding:4px 7px; font:inherit; }
   button { cursor:pointer; white-space:nowrap; }
   button:hover:not(:disabled) { border-color:var(--acc); }
   button:disabled, input:disabled, select:disabled { opacity:.4; cursor:default; }
   button.pri { border-color:var(--acc); color:var(--acc); }
-  button.solid { background:var(--acc); border-color:var(--acc); color:#14161a; font-weight:600; }
-  button.solid:hover:not(:disabled) { background:#ffc46e; border-color:#ffc46e; }
+  button.solid { background:var(--acc); border-color:var(--acc); color:var(--panel);
+                 font-weight:600; }
+  button.solid:hover:not(:disabled) { background:var(--acc2); border-color:var(--acc2); }
   button.danger:hover { border-color:var(--bad); color:var(--bad); }
-  button.tab { border-color:transparent; color:var(--dim); padding:2px 8px; }
+  button.tab { border-color:transparent; color:var(--dim); padding:2px 8px; background:none; }
   button.tab.on { border-color:var(--acc); color:var(--acc); }
   input[type=number] { width:64px; }
   input[type=checkbox] { accent-color:var(--acc); }
@@ -61,7 +75,8 @@
   #stage { position:relative; line-height:0; background:#000; margin:0 auto; }
   video { width:100%; display:block; }
   canvas { position:absolute; inset:0; width:100%; height:100%; cursor:crosshair; }
-  #peek { position:absolute; top:6px; left:6px; background:#000a; color:var(--acc);
+  /* over video, not over the page: fixed dark chrome in both themes */
+  #peek { position:absolute; top:6px; left:6px; background:#000a; color:#ffb454;
           padding:2px 6px; border-radius:3px; font-size:11px; line-height:1.4; }
   #seek { flex:1; min-width:80px; accent-color:var(--acc); padding:0; }
 
@@ -69,7 +84,7 @@
   .grp { border-radius:4px; }
   .grp-head, .mem { display:flex; gap:6px; align-items:center; padding:3px 4px;
                     border-radius:4px; cursor:pointer; }
-  .grp-head:hover, .mem:hover { background:#252932; }
+  .grp-head:hover, .mem:hover { background:var(--ctl); }
   .mem { padding-left:22px; font-size:12px; color:var(--dim); }
   .tw { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .cnt { color:var(--acc); font-size:11px; }
@@ -80,7 +95,7 @@
   /* box list */
   .box-item { padding:4px 6px; border:1px solid var(--line); border-radius:4px;
               margin-bottom:4px; cursor:pointer; display:flex; gap:6px; align-items:center; }
-  .box-item.sel { border-color:var(--acc); background:#252932; }
+  .box-item.sel { border-color:var(--acc); background:var(--ctl); }
   .box-item .tw { font-size:12px; }
   .kf { display:flex; gap:6px; align-items:center; color:var(--dim); font-size:11.5px;
         padding:1px 0; }
@@ -90,7 +105,7 @@
   .tag.exact { color:var(--ok); } .tag.substr { color:var(--info); }
   .tag.fuzzy { color:var(--fuzz); } .tag.regex { color:var(--acc); }
   .tag.dropped { color:var(--bad); }
-  textarea { width:100%; background:#0f1115; color:#9ecbff; resize:none; flex:1;
+  textarea { width:100%; background:var(--code); color:var(--codefg); resize:none; flex:1;
              font:11px/1.4 ui-monospace,monospace; min-height:0; }
   progress { width:100%; height:5px; accent-color:var(--acc); }
   .warn { color:var(--acc); } .err { color:var(--bad); } .good { color:var(--ok); }
@@ -99,93 +114,101 @@
   /* The webview silently returns true from window.confirm and swallows window.alert, so a
      native dialog is neither a gate nor a message. These are. */
   #toast { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); z-index:20;
-           background:#252932; border:1px solid var(--acc); color:var(--fg);
-           padding:8px 14px; border-radius:6px; max-width:70vw; box-shadow:0 6px 24px #0008; }
+           background:var(--panel); border:1px solid var(--acc); color:var(--fg);
+           padding:8px 14px; border-radius:6px; max-width:70vw;
+           box-shadow:0 6px 24px var(--shadow); }
   #toast.err { border-color:var(--bad); }
-  #modal { position:fixed; inset:0; z-index:30; background:#000b;
+  #modal { position:fixed; inset:0; z-index:30; background:var(--veil);
            display:flex; align-items:center; justify-content:center; }
   #modal .card { background:var(--panel); border:1px solid var(--acc); border-radius:8px;
-                 padding:16px; max-width:560px; box-shadow:0 8px 40px #000a; }
+                 padding:16px; max-width:560px; box-shadow:0 8px 40px var(--shadow); }
   #modal .card p { margin:0 0 12px; white-space:pre-wrap; line-height:1.5; }
-  #done { position:fixed; inset:0; z-index:30; background:#000b;
+  #done { position:fixed; inset:0; z-index:30; background:var(--veil);
           display:flex; align-items:center; justify-content:center; }
   #done .card { background:var(--panel); border:1px solid var(--acc); border-radius:8px;
-                padding:16px; width:min(620px,86vw); box-shadow:0 8px 40px #000a; }
+                padding:16px; width:min(620px,86vw); box-shadow:0 8px 40px var(--shadow); }
   #done .card p { margin:0 0 10px; line-height:1.5; }
   /* ffmpeg's own words, live. Without them a slow render and a wedged one look identical. */
-  #fflog { margin:4px 0 0; max-height:150px; overflow:auto; background:#0f1115; color:#9ecbff;
-           border:1px solid var(--line); border-radius:4px; padding:6px;
+  #fflog { margin:4px 0 0; max-height:150px; overflow:auto; background:var(--code);
+           color:var(--codefg); border:1px solid var(--line); border-radius:4px; padding:6px;
            font:10.5px/1.35 ui-monospace,monospace; white-space:pre-wrap; word-break:break-all; }
 </style>
 
 <header>
   <h1>AUTOBLUR</h1>
-  <button id="pick" class="pri">open video…</button>
-  <span class="hint" id="vinfo">no video</span>
+  <span class="hint" id="ver"></span>
+  <button id="pick" class="pri" data-i18n="open.video">open video…</button>
+  <span class="hint" id="vinfo" data-i18n="no.video">no video</span>
+  <select id="mode" style="margin-left:auto" data-i18n-title="mode.title">
+    <option value="simple" data-i18n="mode.simple">simple</option>
+    <option value="advanced" data-i18n="mode.advanced">advanced</option>
+  </select>
+  <select id="theme" data-i18n-title="theme.title">
+    <option value="auto" data-i18n="theme.auto">theme: system</option>
+    <option value="dark" data-i18n="theme.dark">theme: dark</option>
+    <option value="light" data-i18n="theme.light">theme: light</option>
+  </select>
+  <select id="uilang" data-i18n-title="lang.title">
+    <option value="auto">auto</option>
+    <option value="en">English</option>
+    <option value="de">Deutsch</option>
+  </select>
 </header>
 
 <main>
   <!-- ==================== left: find text ==================== -->
   <div class="col">
     <div class="panel">
-      <h2>1 · read the video</h2>
+      <h2 data-i18n="s1.title">1 · read the video</h2>
       <div class="row">
         <select id="lang" style="flex:1"></select>
       </div>
       <div class="row">
-        <span class="hint">check</span>
-        <input type="number" id="rate" value="2" step="1" min="0.1" style="width:52px">
-        <span class="hint">frames/sec</span>
-        <button id="runocr" class="pri" style="margin-left:auto">read</button>
-        <button id="cancelocr" hidden>stop</button>
+        <span class="hint adv" data-i18n="s1.check">check</span>
+        <input type="number" id="rate" value="2" step="1" min="0.1" style="width:52px" class="adv">
+        <span class="hint adv" data-i18n="s1.fps">frames/sec</span>
+        <button id="runocr" class="pri" style="margin-left:auto" data-i18n="s1.read">read</button>
+        <button id="cancelocr" hidden data-i18n="stop">stop</button>
       </div>
       <progress id="ocrprog" value="0" max="1" hidden style="margin-top:6px"></progress>
       <div class="hint" id="ocrstat" style="margin-top:4px"></div>
     </div>
 
     <div class="panel grow">
-      <h2>2 · pick what to hide <span class="n" id="nstr"></span>
-        <span class="why" title="Every distinct piece of text found in the video. Near-identical readings of the same thing are grouped — tick the group to catch all its spellings.">?</span>
+      <h2><span data-i18n="s2.title">2 · pick what to hide</span> <span class="n" id="nstr"></span>
+        <span class="why" data-i18n-title="s2.why">?</span>
       </h2>
       <div class="row">
-        <input id="filter" placeholder="filter…" style="flex:1;min-width:0">
-        <button id="selall" title="tick everything shown">all</button>
-        <button id="selnone" title="untick everything">none</button>
+        <input id="filter" data-i18n-ph="s2.filter" placeholder="filter…" style="flex:1;min-width:0">
+        <button id="selall" data-i18n="s2.all" data-i18n-title="s2.all.title">all</button>
+        <button id="selnone" data-i18n="s2.none" data-i18n-title="s2.none.title">none</button>
       </div>
-      <div class="row">
-        <input id="rx" placeholder="regex — e.g. \d{2}-[A-Z]{3}" style="flex:1;min-width:0" disabled>
+      <div class="row adv">
+        <input id="rx" data-i18n-ph="s2.rx" placeholder="regex" style="flex:1;min-width:0" disabled>
       </div>
-      <div class="hint" id="rxstat" style="margin-top:4px"></div>
+      <div class="hint adv" id="rxstat" style="margin-top:4px"></div>
       <div class="scroll" id="strings" style="margin-top:6px"></div>
     </div>
 
     <div class="panel">
-      <h2>3 · hide it</h2>
+      <h2 data-i18n="s3.title">3 · hide it</h2>
       <div class="row">
-        <span class="hint">style</span>
-        <select id="genmode" style="flex:1">
-          <option value="pixelate">pixelate</option>
-          <option value="blur">blur</option>
-          <option value="black">black bar</option>
-        </select>
-      </div>
-      <div class="row">
-        <span class="hint" title="OCR drops frames on motion blur. A dropout shorter than this keeps the box on, covering the whole gap.">bridge dropouts up to</span>
+        <span class="hint" data-i18n="s3.bridge" data-i18n-title="s3.bridge.title">bridge dropouts up to</span>
         <input type="number" id="gapSec" value="0.5" min="0" step="0.1" style="width:52px"> s
       </div>
       <div class="row">
-        <span class="hint" title="Extra pixels around each detection.">margin</span>
+        <span class="hint" data-i18n="s3.margin" data-i18n-title="s3.margin.title">margin</span>
         <input type="number" id="padPx" value="6" min="0" step="1" style="width:52px"> px
       </div>
-      <div class="row">
-        <span class="hint" title="Jump: each box holds the rect OCR actually measured until the next reading. Slide: the box travels between readings, inventing positions in between.">between readings</span>
+      <div class="row adv">
+        <span class="hint" data-i18n="s3.between" data-i18n-title="s3.between.title">between readings</span>
         <select id="interp" style="flex:1">
-          <option value="step">jump</option>
-          <option value="linear">slide</option>
+          <option value="step" data-i18n="interp.step">jump</option>
+          <option value="linear" data-i18n="interp.linear">slide</option>
         </select>
       </div>
       <div class="row" style="margin-top:8px">
-        <button id="gen" class="pri" style="flex:1">hide selected</button>
+        <button id="gen" class="pri" style="flex:1" data-i18n="s3.gen">hide selected</button>
       </div>
       <div class="hint" id="genstat" style="margin-top:5px"></div>
     </div>
@@ -195,65 +218,65 @@
   <div class="col">
     <div class="panel" style="flex:0 0 auto">
       <div id="stage"><video id="vid"></video><canvas id="cv"></canvas>
-        <span id="peek" hidden>boxes hidden — is the text visible?</span></div>
+        <span id="peek" hidden data-i18n="peek">boxes hidden — is the text visible?</span></div>
       <div class="row" style="margin-top:8px">
         <button id="play">▶</button>
         <input type="range" id="seek" min="0" max="1" step="0.001" value="0">
         <span class="hint" id="clock">0.00 s</span>
       </div>
       <div class="row">
-        <button id="prev10" title="back 10 frames — Shift+←">◀◀</button>
-        <button id="prev" title="back one frame — ←">◀ frame</button>
-        <button id="next" title="forward one frame — →">frame ▶</button>
-        <button id="next10" title="forward 10 frames — Shift+→">▶▶</button>
-        <span class="hint">video fps</span>
+        <button id="prev10" data-i18n-title="t.back10">◀◀</button>
+        <button id="prev" data-i18n-title="t.back1"><span data-i18n="t.frame.back">◀ frame</span></button>
+        <button id="next" data-i18n-title="t.fwd1"><span data-i18n="t.frame.fwd">frame ▶</span></button>
+        <button id="next10" data-i18n-title="t.fwd10">▶▶</button>
+        <span class="hint" data-i18n="t.vfps">video fps</span>
         <input type="number" id="fps" value="25" step="1" min="1" style="width:52px">
-        <span class="hint" style="margin-left:auto">← → step · Shift ×10 · Home/End · Space plays
-          · drag on the video to draw a box</span>
+        <span class="hint" style="margin-left:auto" data-i18n="t.keys">← → step · Shift ×10 ·
+          Home/End · Space plays · drag on the video to draw a box</span>
       </div>
     </div>
 
-    <div class="panel grow" id="check">
-      <h2>4 · check before exporting
+    <div class="panel grow adv" id="check">
+      <h2><span data-i18n="s4.title">4 · check before exporting</span>
         <span class="n" id="checkn"></span>
-        <span class="why" title="Generated redactions are proposals. Nothing here is automatic — step through and confirm.">?</span>
+        <span class="why" data-i18n-title="s4.why">?</span>
       </h2>
       <div class="row">
-        <button class="tab on" data-tab="hits" id="tab-hits">every hit</button>
+        <button class="tab on" data-tab="hits" id="tab-hits" data-i18n="s4.tab.hits">every hit</button>
         <button class="tab" data-tab="gaps" id="tab-gaps">guessed stretches</button>
         <button class="tab" data-tab="miss" id="tab-miss">almost matched</button>
       </div>
       <div class="sep"></div>
 
       <div id="pane-hits" style="display:flex;flex-direction:column;min-height:0;flex:1">
-        <div class="hint">Each place the text was found. Step through them and confirm the box
-          sits over the text; drop any that are wrong.</div>
+        <div class="hint" data-i18n="s4.hits.hint">Each place the text was found. Step through them
+          and confirm the box sits over the text; drop any that are wrong.</div>
         <div class="row" style="margin-top:7px">
-          <button id="hprev">◀ prev</button><button id="hnext">next ▶</button>
+          <button id="hprev" data-i18n="s4.prev">◀ prev</button>
+          <button id="hnext" data-i18n="s4.next">next ▶</button>
           <span id="hitn" class="hint"></span>
-          <button id="hdrop" style="margin-left:auto">drop this one</button>
+          <button id="hdrop" style="margin-left:auto" data-i18n="s4.drop">drop this one</button>
         </div>
         <div class="row"><span id="hitinfo" class="hint"></span></div>
         <div class="sep"></div>
-        <div class="hint">Jump just outside the redaction with the boxes switched off, to see
-          whether the text is readable there:</div>
+        <div class="hint" data-i18n="s4.peek.hint">Jump just outside the redaction with the boxes
+          switched off, to see whether the text is readable there:</div>
         <div class="row" style="margin-top:6px">
-          <button id="peekb">◀ frame before it starts</button>
-          <button id="peeka">frame after it ends ▶</button>
+          <button id="peekb" data-i18n="s4.peek.before">◀ frame before it starts</button>
+          <button id="peeka" data-i18n="s4.peek.after">frame after it ends ▶</button>
         </div>
       </div>
 
       <div id="pane-gaps" hidden style="flex-direction:column;min-height:0;flex:1">
-        <div class="hint">OCR lost the text for these stretches — motion blur, compression, a
-          hand passing over it. The box was held across the gap at a size covering both ends,
-          rather than switching off. Play each one and confirm it stayed covered.</div>
+        <div class="hint" data-i18n="s4.gaps.hint">OCR lost the text for these stretches — motion
+          blur, compression, a hand passing over it. The box was held across the gap at a size
+          covering both ends, rather than switching off. Play each one and confirm it stayed
+          covered.</div>
         <div class="scroll" id="gaplist" style="margin-top:7px"></div>
       </div>
 
       <div id="pane-miss" hidden style="flex-direction:column;min-height:0;flex:1">
-        <div class="hint">Text that <b>nearly</b> matched what you picked but was left visible —
-          usually a bad OCR reading of the same thing, or text half out of frame. This is where
-          a leak hides. Check each one; add it if it is the same thing.</div>
+        <div class="hint" id="misshint"></div>
         <div class="scroll" id="misslist" style="margin-top:7px"></div>
       </div>
     </div>
@@ -262,78 +285,69 @@
   <!-- ==================== right: boxes ==================== -->
   <div class="col">
     <div class="panel">
-      <h2>project <span class="hint" id="fname" style="margin-left:auto">unsaved</span></h2>
+      <h2><span data-i18n="p.title">project</span>
+        <span class="hint" id="fname" style="margin-left:auto" data-i18n="p.unsaved">unsaved</span></h2>
       <div class="row">
-        <button id="export" class="solid" style="flex:1">render redacted video…</button>
+        <button id="export" class="solid" style="flex:1" data-i18n="p.export">render redacted video…</button>
       </div>
       <div class="row">
-        <button id="save">save</button>
-        <button id="saveas">save as…</button>
-        <button id="open">open…</button>
-        <button id="reset" class="danger" style="margin-left:auto">reset</button>
+        <button id="save" data-i18n="p.save">save</button>
+        <button id="saveas" data-i18n="p.saveas">save as…</button>
+        <button id="open" data-i18n="p.open">open…</button>
+        <button id="reset" class="danger" style="margin-left:auto" data-i18n="p.reset">reset</button>
       </div>
       <progress id="expprog" value="0" max="1" hidden style="margin-top:6px"></progress>
       <div class="row" id="exprow" hidden style="margin-top:4px">
         <span class="hint" id="expstat" style="flex:1;min-width:0"></span>
-        <button id="expcancel" class="danger">stop</button>
+        <button id="expcancel" class="danger" data-i18n="stop">stop</button>
       </div>
       <div class="hint" id="expstat2" style="margin-top:4px"></div>
       <div class="row" style="margin-top:4px">
-        <button id="loghow" class="tab" style="padding:0">ffmpeg output ▸</button>
+        <button id="loghow" class="tab" style="padding:0"></button>
       </div>
       <pre id="fflog" hidden></pre>
       <div class="row" style="margin-top:6px">
         <button id="verify" disabled style="flex:1"
-          title="Re-reads the exported file and checks none of the redacted text can still be found.">verify the exported file</button>
+          data-i18n="p.verify" data-i18n-title="p.verify.title">verify the exported file</button>
       </div>
       <div id="recent"></div>
     </div>
 
     <div class="panel" style="flex:0 0 auto">
-      <h2>boxes <span class="n" id="nbox"></span></h2>
-      <div class="row">
-        <span class="hint">all:</span>
-        <select id="allmode" style="flex:1">
-          <option value="">set style for every box…</option>
-          <option value="pixelate">pixelate</option>
-          <option value="blur">blur</option>
-          <option value="black">black bar</option>
-        </select>
-        <button id="delall" class="danger" title="remove every box">clear</button>
-      </div>
+      <h2><span data-i18n="b.title">boxes</span> <span class="n" id="nbox"></span>
+        <button id="delall" class="danger" style="margin-left:auto"
+          data-i18n="b.clear" data-i18n-title="b.clear.title">clear</button></h2>
       <div class="scroll" id="list" style="max-height:150px;margin-top:6px"></div>
-      <div class="hint" id="empty">none yet — pick text on the left, or drag on the video</div>
+      <div class="hint" id="empty" data-i18n="b.empty">none yet — pick text on the left, or drag on the video</div>
     </div>
 
     <div class="panel grow" id="edit">
-      <h2>selected box <span class="n" id="selname"></span></h2>
-      <div class="hint" id="nosel">nothing selected</div>
+      <h2><span data-i18n="e.title">selected box</span> <span class="n" id="selname"></span></h2>
+      <div class="hint" id="nosel" data-i18n="e.nosel">nothing selected</div>
       <div id="selbody" hidden style="display:flex;flex-direction:column;min-height:0;flex:1">
         <div class="row">
-          <select id="bmode">
-            <option value="black">black bar</option>
-            <option value="blur">blur</option>
-            <option value="pixelate">pixelate</option>
+          <select id="bc">
+            <option value="black" data-i18n="col.black">black</option>
+            <option value="white" data-i18n="col.white">white</option>
+            <option value="red" data-i18n="col.red">red</option>
           </select>
-          <select id="bc"><option value="black">black</option><option value="white">white</option><option value="red">red</option></select>
-          <input type="number" id="bstr" min="2" max="60" step="1" title="blur radius / pixel block" hidden>
-          <select id="binterp" title="how the box behaves between its keyframes">
-            <option value="step">jump</option>
-            <option value="linear">slide</option>
+          <select id="binterp" class="adv" data-i18n-title="e.interp.title">
+            <option value="step" data-i18n="interp.step">jump</option>
+            <option value="linear" data-i18n="interp.linear">slide</option>
           </select>
-          <button id="del" class="danger" style="margin-left:auto" title="Delete key">delete</button>
+          <button id="del" class="danger" style="margin-left:auto"
+            data-i18n="e.del" data-i18n-title="e.del.title">delete</button>
         </div>
-        <div class="hint" id="bwarn"></div>
-        <div class="sep"></div>
-        <h2>visible from → to</h2>
-        <div id="spans"></div>
-        <div class="row">
-          <button id="cut">split here</button>
-          <button id="addspan">+ range</button>
-          <button id="addkf" style="margin-left:auto">keyframe here</button>
+        <div class="sep adv"></div>
+        <h2 class="adv" data-i18n="e.spans">visible from → to</h2>
+        <div id="spans" class="adv"></div>
+        <div class="row adv">
+          <button id="cut" data-i18n="e.cut">split here</button>
+          <button id="addspan" data-i18n="e.addspan">+ range</button>
+          <button id="addkf" style="margin-left:auto" data-i18n="e.addkf">keyframe here</button>
         </div>
         <div class="sep"></div>
-        <h2>keyframes <span class="n" id="nkf"></span></h2>
+        <h2><span data-i18n="e.kfs">keyframes</span> <span class="n" id="nkf"></span></h2>
         <div class="scroll" id="kfs"></div>
       </div>
     </div>
@@ -344,20 +358,20 @@
 <div id="modal" hidden><div class="card">
   <p id="modal-msg"></p>
   <div class="row" style="justify-content:flex-end">
-    <button id="modal-no">cancel</button>
-    <button id="modal-yes" class="pri">go ahead</button>
+    <button id="modal-no" data-i18n="cancel">cancel</button>
+    <button id="modal-yes" class="pri" data-i18n="goahead">go ahead</button>
   </div>
 </div></div>
 
 <div id="done" hidden><div class="card">
-  <h2 style="margin-bottom:10px">export finished</h2>
+  <h2 style="margin-bottom:10px" data-i18n="d.title">export finished</h2>
   <p id="done-path" style="font-size:12px;color:var(--dim);word-break:break-all"></p>
   <p id="done-info" style="font-size:12px"></p>
   <div class="row">
-    <button id="done-folder">show in folder</button>
-    <button id="done-open">play the file</button>
-    <button id="done-verify" class="pri">check the text is gone</button>
-    <button id="done-close" style="margin-left:auto">close</button>
+    <button id="done-folder" data-i18n="d.folder">show in folder</button>
+    <button id="done-open" data-i18n="d.open">play the file</button>
+    <button id="done-verify" class="pri" data-i18n="d.verify">check the text is gone</button>
+    <button id="done-close" style="margin-left:auto" data-i18n="d.close">close</button>
   </div>
   <div class="hint" id="done-stat" style="margin-top:10px"></div>
 </div></div>
@@ -430,37 +444,21 @@ function evalExpr(s, t) {
 }
 
 const esc = s => s.replace(/,/g, '\\,');   // commas are filtergraph separators
-const even = v => Math.max(2, Math.ceil(v/2)*2);
 
+/* Filled boxes only.
+
+   Blur and pixelate needed a split, a crop, two scales and an overlay per box — every one of
+   them running on every frame whether the box was enabled or not. With long tracks split into
+   chunks that reached 0.0 fps: unusable. `drawbox` writes in place, chains with a plain comma
+   and needs no stream labels, so any number of boxes stays one cheap pass. Blur over text is
+   partially recoverable anyway, which is why a filled bar was always the right default. */
 function graph(src) {
-  const list = src.filter(b => b.kfs.length && b.spans.length);
-  const parts = [];
-  let cur = '';                                    // '' = implicit graph input
-  list.forEach((b, i) => {
-    const out = i === list.length-1 ? '' : `[v${i}]`;
+  return src.filter(b => b.kfs.length && b.spans.length).map(b => {
+    const p = k => esc(expr(b, k));
     const en = esc(b.spans.map(s => `between(t,${s.s},${s.e})`).join('+'));
-    if (b.mode === 'black') {
-      const p = k => esc(expr(b, k));
-      parts.push(`${cur}drawbox=x=${p('x')}:y=${p('y')}:w=${p('w')}:h=${p('h')}`
-               + `:color=${b.color}@1:t=fill:enable=${en}${out}`);
-    } else {
-      // crop w/h are fixed at config time, so a blurred region can move but not resize:
-      // take the largest keyframe size, rounded up to even for yuv420p chroma
-      const W = even(Math.max(...b.kfs.map(k => k.w)));
-      const H = even(Math.max(...b.kfs.map(k => k.h)));
-      const pos = (k, lim) => esc(`2*floor(max(0,min(${lim},${expr(b,k)}))/2)`);
-      const fx = b.mode === 'blur'
-        ? `boxblur=${b.strength}:1`
-        : `scale=${Math.max(1,Math.round(W/b.strength))}:${Math.max(1,Math.round(H/b.strength))}`
-          + `,scale=${W}:${H}:flags=neighbor`;
-      parts.push(`${cur}split[m${i}][c${i}]`);
-      parts.push(`[c${i}]crop=${W}:${H}:${pos('x','in_w-out_w')}:${pos('y','in_h-out_h')},${fx}[b${i}]`);
-      parts.push(`[m${i}][b${i}]overlay=${pos('x','main_w-overlay_w')}:${pos('y','main_h-overlay_h')}`
-               + `:enable=${en}${out}`);
-    }
-    cur = out;
-  });
-  return parts.join(';');
+    return `drawbox=x=${p('x')}:y=${p('y')}:w=${p('w')}:h=${p('h')}`
+         + `:color=${b.color || 'black'}@1:t=fill:enable=${en}`;
+  }).join(',');
 }
 
 /* ---------- §6 string index and matching ---------- */
@@ -543,36 +541,6 @@ function groupStrings(index) {
   return groups;
 }
 
-const rectsUnion = rs => {
-  const x = Math.min(...rs.map(r => r[0])), y = Math.min(...rs.map(r => r[1]));
-  return [x, y, Math.max(...rs.map(r => r[0]+r[2])) - x, Math.max(...rs.map(r => r[1]+r[3])) - y];
-};
-
-/* The rect of just the words that form the match, not the whole OCR line.
-
-   Windows OCR groups nearby words into one OcrLine, so a line can carry text either side of
-   what you selected — a postcode, the next column, or a second visual row when line spacing is
-   tight or the frame is mid-scroll. Redacting the line rect then paints a bar far taller and
-   wider than the text you picked. Falls back to the line rect when no run of words contains the
-   selection (fuzzy and regex hits, mostly). */
-function matchRect(line, q) {
-  const ws = line.words || [];
-  if (!q || ws.length < 2) return line.rect;
-  const norms = ws.map(w => normalize(w.text));
-  let best = null;
-  for (let i = 0; i < ws.length; i++) {
-    let acc = '';
-    for (let j = i; j < ws.length; j++) {
-      acc = acc ? acc + ' ' + norms[j] : norms[j];
-      if (acc.includes(q)) {
-        if (!best || j - i < best[1] - best[0]) best = [i, j];
-        break;                                   // shortest run starting at i
-      }
-    }
-  }
-  return best ? rectsUnion(ws.slice(best[0], best[1] + 1).map(w => w.rect)) : line.rect;
-}
-
 // -> [{i, t, rect, text, kind}] ; kind: exact | substr | fuzzy | regex
 function matchLines(lines, query, opts) {
   const q = normalize(query);
@@ -587,8 +555,10 @@ function matchLines(lines, query, opts) {
     else if (q && opts.fuzzy && q.length >= 6 && lev(n, q, fuzzTol(q)) <= fuzzTol(q)) kind = 'fuzzy';
     else if (re && re.test(l.text)) kind = 'regex';
     if (!kind) return;
-    const r = (kind === 'exact' || kind === 'substr') ? matchRect(l, q) : l.rect;
-    hits.push({ i, t:l.t, rect:r.slice(), text:l.text, kind, line:l.rect.slice() });
+    /* The rect is the whole line OCR read, not just the words that matched. Narrowing it to the
+       matched words hugs the glyphs, and a box that hugs glyphs leaves their anti-aliased edges
+       readable — the verify pass catches it as text still present. Over-covering is free. */
+    hits.push({ i, t:l.t, rect:l.rect.slice(), text:l.text, kind });
   });
   return hits;
 }
@@ -607,6 +577,23 @@ function nearMisses(lines, query, hits) {
     if (d <= 3) out.push({ i, t:l.t, rect:l.rect.slice(), text:l.text, dist:d });
   });
   return out.sort((a,b) => a.dist - b.dist || a.t - b.t);
+}
+
+/* One row per distinct reading, not one per frame. The same near-miss on 200 consecutive frames
+   is one thing to judge, and listing it 200 times buries the handful that differ — a list of 846
+   rows is not a review surface, it is a wall. */
+function groupMisses(misses) {
+  const m = new Map();
+  for (const x of misses) {
+    const k = normalize(x.text);
+    let g = m.get(k);
+    if (!g) m.set(k, g = { norm:k, text:x.text, dist:x.dist, count:0, first:x.t, last:x.t });
+    g.count++;
+    g.dist = Math.min(g.dist, x.dist);
+    g.first = Math.min(g.first, x.t);
+    g.last = Math.max(g.last, x.t);
+  }
+  return [...m.values()].sort((a,b) => a.dist - b.dist || b.count - a.count);
 }
 
 /* ---------- §7 occurrence -> track ---------- */
@@ -832,7 +819,7 @@ function chunkTrack(box, limit = EXPR_TERMS) {
 }
 
 /* occs: [{t, rect:[x,y,w,h], kind, text}]  ->  boxes in the editor's model.
-   opts: {rate, duration, W, H, gapBridge, padPx, mode, strength, color} */
+   opts: {rate, duration, W, H, gapBridgeSec, padPx, interp, color} */
 function toTracks(occs, opts) {
   const dt = 1 / opts.rate;
   /* Bridging is measured in SECONDS, not samples. Counting samples ties the bridged window to
@@ -886,12 +873,9 @@ function toTracks(occs, opts) {
       if (g > dt + 1e-9 && g <= GAP + 1e-9) gaps.push({ from:os[i-1].t, to:os[i].t, len:+g.toFixed(3) });
     }
 
-    const areas = os.map(o => Math.max(1, o.rect[2] * o.rect[3]));
-    const varied = Math.max(...areas) / Math.min(...areas) > 2;
-
-    return chunkTrack({ id:0, mode:opts.mode || 'pixelate', color:opts.color || 'black',
-                        strength:opts.strength ?? 12, interp: step ? 'step' : 'linear',
-                        spans, kfs, gen:{ occs:os, gaps, varied } });
+    return chunkTrack({ id:0, color:opts.color || 'black',
+                        interp: step ? 'step' : 'linear',
+                        spans, kfs, gen:{ occs:os, gaps } });
   });
 }
 
@@ -913,7 +897,7 @@ function selfTest() {
   const ok = (c, m, got) => { if (!c) throw new Error(`selfTest ${m}: ${got}`); };
 
   /* --- ported checks, unchanged --- */
-  const b = { mode:'black', color:'black', spans:[{s:0,e:9}], kfs:[
+  const b = { color:'black', spans:[{s:0,e:9}], kfs:[
     {t:0,x:10,y:0,w:50,h:20}, {t:2,x:30,y:0,w:50,h:20} ] };
   ok(expr(b,'w') === '50', 'constant track must collapse', expr(b,'w'));
   ok(Math.round(at(b,1,'x')) === 20, 'midpoint interp', at(b,1,'x'));
@@ -934,7 +918,7 @@ function selfTest() {
   ok(!expr(b,'x').includes('if('), 'no nested if(): ffmpeg gives up at ~100 levels', expr(b,'x'));
 
   // a keyframe per frame of a moving box: flat, deep-nesting-free, and still exact
-  const many = { mode:'black', color:'black', spans:[{s:0,e:10}],
+  const many = { color:'black', spans:[{s:0,e:10}],
     kfs: Array.from({length:300}, (_,i) => ({ t:+(i/30).toFixed(4), x:100+i*3, y:300, w:460, h:48 })) };
   ok(agrees(many, 'x', 0, 10) === -1, 'dense track matches the preview', agrees(many,'x',0,10));
   ok(simplify(many.kfs, 1).length === 2, 'a straight line collapses to two keyframes',
@@ -944,13 +928,14 @@ function selfTest() {
   ok(graph([g]).includes('between(t\\,0\\,2)+between(t\\,5\\,9)'), 'spans OR-ed', graph([g]));
   ok(!visible(g,3) && visible(g,6), 'gap hides the box');
 
-  const bl = graph([{ ...b, mode:'blur', strength:12 }]);
-  ok(/split\[m0\]\[c0\];\[c0\]crop=50:20:.*boxblur=12:1\[b0\];\[m0\]\[b0\]overlay=/.test(bl), 'blur chain', bl);
-  const px = graph([{ ...b, mode:'pixelate', strength:10 }]);
-  ok(px.includes('scale=5:2,scale=50:20:flags=neighbor'), 'pixelate chain', px);
-  // two boxes must be labelled through, last one unlabelled
-  const two = graph([b, { ...b, mode:'blur', strength:8 }]);
-  ok(two.includes('[v0]split') && !two.includes('[v1]'), 'chain labels', two);
+  /* Filled boxes only: one drawbox per box, chained with commas, no stream labels and no
+     per-box split/crop/scale/overlay. That is what makes many boxes affordable. */
+  ok(graph([b]).startsWith('drawbox='), 'a box is one drawbox', graph([b]));
+  const two = graph([b, { ...b, color:'red' }]);
+  ok(two.split('drawbox=').length === 3, 'two boxes, two drawboxes', two);
+  ok(!two.includes('[') && !two.includes('split') && !two.includes('overlay'),
+     'no stream labels and no overlay pass', two);
+  ok(two.includes('color=red@1'), 'colour carried through', two);
 
   /* --- §6 index and matching --- */
   ok(normalize('  Haupt   STRASSE 14. ') === 'haupt strasse 14', 'normalize', normalize('  Haupt   STRASSE 14. '));
@@ -971,21 +956,17 @@ function selfTest() {
   ok(h[2].kind === 'fuzzy', 'drifted hit flagged fuzzy', h[2].kind);
   ok(matchLines(L, 'Hauptstrasse 14', { ...opt, fuzzy:false }).length === 2, 'fuzzy off', 0);
   ok(matchLines(L, '', { ...opt, regex:'^Neben' }).length === 1, 'regex mode', 0);
-  /* The box must cover the words you picked, not everything OCR lumped into the line. */
-  const wl = [{ t:0, text:'Hauptstrasse 14 8001 Zuerich', rect:[10,10,400,20], words:[
-    { text:'Hauptstrasse', rect:[10,10,150,20] }, { text:'14', rect:[170,10,30,20] },
-    { text:'8001', rect:[210,10,60,20] }, { text:'Zuerich', rect:[280,10,130,20] } ] }];
-  ok(JSON.stringify(matchRect(wl[0], 'hauptstrasse 14')) === JSON.stringify([10,10,190,20]),
-     'rect covers only the matched words', JSON.stringify(matchRect(wl[0],'hauptstrasse 14')));
-  ok(JSON.stringify(matchRect(wl[0], '8001')) === JSON.stringify([210,10,60,20]),
-     'a mid-line match does not drag in its neighbours', JSON.stringify(matchRect(wl[0],'8001')));
-  ok(JSON.stringify(matchRect(wl[0], 'nothing here')) === JSON.stringify([10,10,400,20]),
-     'falls back to the line rect when no run matches', 0);
-  ok(JSON.stringify(matchLines(wl, 'Hauptstrasse 14', opt)[0].rect) === JSON.stringify([10,10,190,20]),
-     'matchLines uses the word rect', JSON.stringify(matchLines(wl,'Hauptstrasse 14',opt)[0].rect));
-
   const nm = nearMisses(L, 'Hauptstrasse 14', matchLines(L, 'Hauptstrasse 14', { ...opt, fuzzy:false }));
   ok(nm.length === 1 && nm[0].t === 1.0, 'near-miss surfaces the unmatched drift', JSON.stringify(nm));
+
+  // the same near-miss on many frames is one thing to judge, not one row per frame
+  const many_m = Array.from({length:200}, (_,i) =>
+    ({ i, t:i/30, rect:[0,0,10,10], text:'Hauptstrasse 1A', dist:1 }))
+    .concat([{ i:999, t:9, rect:[0,0,10,10], text:'Nebenweg 9', dist:3 }]);
+  const gm = groupMisses(many_m);
+  ok(gm.length === 2, 'near-misses collapse to distinct readings', gm.length);
+  ok(gm[0].count === 200 && gm[0].dist === 1, 'with a count and the closest distance',
+     JSON.stringify({ c:gm[0].count, d:gm[0].dist }));
 
   // OCR drift collapses into one row to tick; unrelated text stays its own group
   const gs = groupStrings(buildIndex([...L, { t:2, text:'Hauptstrasse l4', rect:[10,10,100,20] }]));
@@ -1009,7 +990,7 @@ function selfTest() {
   /* Generated boxes step between readings rather than sliding: OCR measured a rect on a frame,
      and the emitted filtergraph must hold exactly that, not something in between. */
   ok(tr[0].interp === 'step', 'generated boxes step by default', tr[0].interp);
-  const jump = { interp:'step', spans:[{s:0,e:9}], mode:'black', color:'black',
+  const jump = { interp:'step', spans:[{s:0,e:9}], color:'black',
                  kfs:[{t:0,x:10,y:0,w:50,h:20},{t:2,x:30,y:0,w:50,h:20}] };
   ok(at(jump, 1, 'x') === 10, 'step holds the reading until the next one', at(jump,1,'x'));
   ok(at(jump, 2, 'x') === 30, 'step takes the next reading at its own time', at(jump,2,'x'));
@@ -1118,20 +1099,15 @@ function selfTest() {
   // continuous across every seam: some box must cover the text at every frame
   const coveredBy = t => parts.some(b => {
     if (!visible(b, t)) return false;
-    const r = rectAt(b, t), tx = 100 + (t*30)*3;
-    return r.x <= tx + 0.01 && r.x + r.w >= tx + 150 - 0.01;
+    const r = rectAt(b, t), textX = 100 + (t*30)*3;
+    return r.x <= textX + 0.01 && r.x + r.w >= textX + 150 - 0.01;
   });
   for (let i = 0; i < 300; i++)
     ok(coveredBy(+(i/30).toFixed(4)), `boxes must abut without a hole at frame ${i}`, i);
 
-  // 2x area variation is flagged (§7.7)
-  tr = toTracks([{ t:1, rect:[100,100,50,20], kind:'e', text:'x' },
-                 { t:1.5, rect:[100,100,300,60], kind:'e', text:'x' }], base);
-  ok(tr[0].gen.varied === true, 'area variation warned', JSON.stringify(tr[0].gen));
-
   // generated boxes must survive graph() unchanged
-  const gen = toTracks([4.0,4.5].map(O), { ...base, mode:'pixelate', strength:12 })[0];
-  ok(graph([gen]).includes('flags=neighbor'), 'generated box emits a filtergraph', graph([gen]));
+  const gen = toTracks([4.0,4.5].map(O), base)[0];
+  ok(graph([gen]).startsWith('drawbox='), 'generated box emits a filtergraph', graph([gen]));
 
   /* --- acceptance test 7: hash guard --- */
   ok(hashGuard({ video_sha256:'aa', video:'a.mp4' }, { sha256:'aa' }) === null, 'same hash passes');
@@ -1144,8 +1120,8 @@ function selfTest() {
 
 if (typeof module !== 'undefined') module.exports = {
   at, rectAt, visible, expr, evalExpr, graph, normalize, lev, buildIndex, matchLines,
-  nearMisses, toTracks, clusterTracks, mergeSpans, hashGuard, groupStrings, simplify,
-  matchRect, selfTest,
+  nearMisses, groupMisses, toTracks, clusterTracks, mergeSpans, hashGuard, groupStrings,
+  simplify, selfTest,
 };
 /* ==================== PURE END ==================== */
 selfTest();
@@ -1171,6 +1147,302 @@ let gen = null;                // {hits, dropped, misses, tracks, queries}
 let hitIdx = 0, peekUntil = 0, projectPath = null, lastExport = null;
 let ffLog = [], ffLast = '';
 let tab = 'hits';
+
+/* ==================== language ====================
+   Static text is tagged in the markup and swapped by applyLang(); anything built in JS goes
+   through t(). Entries that interpolate are functions, so a translation can move the numbers
+   around instead of being forced into English word order. */
+const L = {
+en: {
+  'open.video':'open video…', 'no.video':'no video', 'stop':'stop',
+  'mode.title':'Simple hides the settings most jobs never need.',
+  'mode.simple':'simple', 'mode.advanced':'advanced',
+  'theme.title':'System follows Windows’ light/dark setting.',
+  'theme.auto':'theme: system', 'theme.dark':'theme: dark', 'theme.light':'theme: light',
+  'lang.title':'interface language',
+  's1.title':'1 · read the video', 's1.check':'check', 's1.fps':'frames/sec', 's1.read':'read',
+  's2.title':'2 · pick what to hide',
+  's2.why':'Every distinct piece of text found in the video. Near-identical readings of the same '
+          +'thing are grouped — tick the group to catch all its spellings.',
+  's2.filter':'filter…', 's2.all':'all', 's2.all.title':'tick everything shown',
+  's2.none':'none', 's2.none.title':'untick everything',
+  's2.rx':'regex — e.g. \\d{2}-[A-Z]{3}',
+  's3.title':'3 · hide it', 's3.bridge':'bridge dropouts up to',
+  's3.bridge.title':'OCR drops frames on motion blur. A dropout shorter than this keeps the box '
+                   +'on, covering the whole gap.',
+  's3.margin':'margin', 's3.margin.title':'Extra pixels around each detection.',
+  's3.between':'between readings',
+  's3.between.title':'Jump: each box holds the rect OCR actually measured until the next reading. '
+                    +'Slide: the box travels between readings, inventing positions in between.',
+  'interp.step':'jump', 'interp.linear':'slide', 's3.gen':'hide selected',
+  's3.gen.n':n => `hide ${n} selected`,
+  'peek':'boxes hidden — is the text visible?',
+  't.back10':'back 10 frames — Shift+←', 't.back1':'back one frame — ←',
+  't.fwd1':'forward one frame — →', 't.fwd10':'forward 10 frames — Shift+→',
+  't.frame.back':'◀ frame', 't.frame.fwd':'frame ▶', 't.vfps':'video fps',
+  't.keys':'← → step · Shift ×10 · Home/End · Space plays · drag on the video to draw a box',
+  's4.title':'4 · check before exporting',
+  's4.why':'Generated redactions are proposals. Nothing here is automatic — step through and '
+          +'confirm.',
+  's4.tab.hits':'every hit',
+  's4.tab.gaps':n => `guessed stretches (${n})`,
+  's4.tab.miss':n => `almost matched (${n})`,
+  's4.hits.hint':'Each place the text was found. Step through them and confirm the box sits over '
+                +'the text; drop any that are wrong.',
+  's4.prev':'◀ prev', 's4.next':'next ▶', 's4.drop':'drop this one', 's4.undrop':'put it back',
+  's4.peek.hint':'Jump just outside the redaction with the boxes switched off, to see whether the '
+                +'text is readable there:',
+  's4.peek.before':'◀ frame before it starts', 's4.peek.after':'frame after it ends ▶',
+  's4.gaps.hint':'OCR lost the text for these stretches — motion blur, compression, a hand '
+                +'passing over it. The box was held across the gap at a size covering both ends, '
+                +'rather than switching off. Play each one and confirm it stayed covered.',
+  's4.miss.hint':'Text that <b>nearly</b> matched what you picked but was left visible — usually a '
+                +'bad OCR reading of the same thing, or text half out of frame. This is where a '
+                +'leak hides. One row per distinct reading; check each one and add it if it is the '
+                +'same thing.',
+  'p.title':'project', 'p.unsaved':'unsaved', 'p.export':'render redacted video…',
+  'p.save':'save', 'p.saveas':'save as…', 'p.open':'open…', 'p.reset':'reset',
+  'p.verify':'verify the exported file',
+  'p.verify.title':'Re-reads the exported file and checks none of the redacted text can still be '
+                  +'found.',
+  'b.title':'boxes', 'b.clear':'clear', 'b.clear.title':'remove every box',
+  'b.empty':'none yet — pick text on the left, or drag on the video',
+  'e.title':'selected box', 'e.nosel':'nothing selected',
+  'col.black':'black', 'col.white':'white', 'col.red':'red',
+  'e.interp.title':'how the box behaves between its keyframes',
+  'e.del':'delete', 'e.del.title':'Delete key', 'e.spans':'visible from → to',
+  'e.cut':'split here', 'e.addspan':'+ range', 'e.addkf':'keyframe here', 'e.kfs':'keyframes',
+  'cancel':'cancel', 'goahead':'go ahead',
+  'd.title':'export finished', 'd.folder':'show in folder', 'd.open':'play the file',
+  'd.verify':'check the text is gone', 'd.close':'close',
+  'hand':'hand-drawn',
+  'ff.show':'ffmpeg output ▸', 'ff.hide':'ffmpeg output ▾', 'ff.nothing':'(nothing yet)',
+  'ff.none':'(ffmpeg produced no output)',
+  'err.novideo':'open a video first', 'err.noboxes':'no boxes to apply',
+  'err.noocr':'read the video first', 'err.nomatch':'none of the selected text was matched',
+  'ocr.nolang':'no OCR language installed',
+  'ocr.nopack':'No Windows OCR language pack installed. Settings &gt; Time &amp; language &gt; '
+              +'Language.',
+  'ocr.frames':(d,t) => `${d} / ${t} frames`,
+  'ocr.stat':(r,d,g,l) => `<span class="good">${r} readings · ${d} distinct · ${g} groups</span>`
+                        + ` · ${l}`,
+  'ocr.scaled':s => ` · <span class="warn">downscaled ×${s}</span>`,
+  'ocr.reused':(n,l,r) => `${n} readings reused from the project (${l} @ ${r} fps)`,
+  'ocr.dropped':'saved OCR discarded: it was made against a different video',
+  'rx.first':'<span class="hint">run the read step first</span>',
+  'rx.ok':(n,t) => `<span class="good">regex matches ${n} of ${t} strings — the list below is `
+                 + `filtered to them</span>`,
+  'rx.bad':'<span class="err">not a valid regex</span>',
+  'gen.stat':(hits,boxes,qs,dropped) =>
+    `<span class="good">${hits} readings → ${boxes} boxes</span> across ${qs} string(s)`
+    + (dropped ? ` · ${dropped} dropped` : ''),
+  'chk.n':(h,g,m) => `${h} hits · ${g} guessed · ${m} almost`,
+  'chk.nothing':'nothing generated yet',
+  'chk.hitn':(i,n) => `${i} / ${n}`,
+  'chk.hitinfo':(kind,t,text) => `<span class="tag ${kind}">${kind}</span> at ${t}s — OCR read `
+                               + `this line as <b>${text}</b>`,
+  'chk.dropped':' <span class="tag dropped">dropped</span>',
+  'gaps.none':'<span class="good">none — OCR saw the text on every sampled frame it appears '
+             +'in</span>',
+  'gaps.row':s => `${s}s guessed`,
+  'miss.none':'<span class="good">none close enough to worry about</span>',
+  'miss.add':'this is it too',
+  'miss.times':(n,f,l) => n > 1 ? `${n}× · ${f}–${l}s` : `${f}s`,
+  'miss.title':(d,q) => `${d} character(s) different from "${q}"`,
+  'ask.delall':n => `Remove all ${n} boxes?`,
+  'ask.reset':'Reset the project?\n\nBoxes and the OCR result are discarded. The video stays open.',
+  'ask.export':(hits,qs,worries) =>
+    'Generated redactions are proposals, not results.\n\n'
+    + `${hits} hits across ${qs} string(s).\n\n`
+    + (worries.length ? 'Still worth a look:\n· ' + worries.join('\n· ')
+                      : 'Nothing almost-matched and no guessed stretches.')
+    + '\n\nRender it?',
+  'worry.miss':n => `${n} almost-matched, left visible — the most likely place for a leak`,
+  'worry.gaps':n => `${n} stretch(es) where OCR lost the text and the box was guessed`,
+  'exp.start':'starting ffmpeg…', 'exp.stopping':'stopping…',
+  'exp.progress':(p,extra) => `rendering… ${p}%` + (extra ? ` · ${extra}` : ''),
+  'exp.wrote':(name,sha) => `<span class="good">wrote ${name}</span> · log written · sha256 `
+                          + `${sha}…`,
+  'exp.doneinfo':(n,sha,name) => `${n} box(es) applied · sha256 ${sha}…<br><span class="hint">A `
+    + `<b>${name}.redaction-log.json</b> sidecar next to it records the input hash, the exact `
+    + `ffmpeg command and every redacted string.</span>`,
+  'ver.running':'re-reading the exported file…',
+  'ver.pass':(n,lines) => `<span class="good">VERIFIED — none of the ${n} redacted string(s) can `
+                        + `be read in the output (${lines} readings checked)</span>`,
+  'ver.fail':list => `<span class="err">STILL READABLE — ${list}</span>`,
+  'ver.item':(s,n,t) => `"${s}" ×${n} from ${t}s`,
+},
+de: {
+  'open.video':'Video öffnen…', 'no.video':'kein Video', 'stop':'stopp',
+  'mode.title':'Einfach blendet die Einstellungen aus, die die meisten Aufgaben nie brauchen.',
+  'mode.simple':'einfach', 'mode.advanced':'erweitert',
+  'theme.title':'System folgt der Hell/Dunkel-Einstellung von Windows.',
+  'theme.auto':'Design: System', 'theme.dark':'Design: dunkel', 'theme.light':'Design: hell',
+  'lang.title':'Sprache der Oberfläche',
+  's1.title':'1 · Video lesen', 's1.check':'prüfe', 's1.fps':'Bilder/Sek.', 's1.read':'lesen',
+  's2.title':'2 · auswählen, was verdeckt wird',
+  's2.why':'Jeder gefundene Text. Fast identische Lesungen derselben Sache werden gruppiert — '
+          +'die Gruppe anhaken erfasst alle Schreibweisen.',
+  's2.filter':'filtern…', 's2.all':'alle', 's2.all.title':'alles Angezeigte anhaken',
+  's2.none':'keine', 's2.none.title':'alle Haken entfernen',
+  's2.rx':'Regex — z. B. \\d{2}-[A-Z]{3}',
+  's3.title':'3 · verdecken', 's3.bridge':'Aussetzer überbrücken bis',
+  's3.bridge.title':'Bei Bewegungsunschärfe verliert die Texterkennung Bilder. Ein Aussetzer '
+                   +'kürzer als dies lässt den Balken an und deckt die ganze Lücke ab.',
+  's3.margin':'Rand', 's3.margin.title':'Zusätzliche Pixel rund um jeden Fund.',
+  's3.between':'zwischen Lesungen',
+  's3.between.title':'Springen: jeder Balken hält das gemessene Rechteck bis zur nächsten Lesung. '
+                    +'Gleiten: der Balken wandert dazwischen und erfindet Positionen.',
+  'interp.step':'springen', 'interp.linear':'gleiten', 's3.gen':'Auswahl verdecken',
+  's3.gen.n':n => `${n} Ausgewählte verdecken`,
+  'peek':'Balken ausgeblendet — ist der Text lesbar?',
+  't.back10':'10 Bilder zurück — Umschalt+←', 't.back1':'ein Bild zurück — ←',
+  't.fwd1':'ein Bild vor — →', 't.fwd10':'10 Bilder vor — Umschalt+→',
+  't.frame.back':'◀ Bild', 't.frame.fwd':'Bild ▶', 't.vfps':'Video-fps',
+  't.keys':'← → Einzelbild · Umschalt ×10 · Pos1/Ende · Leertaste spielt · im Video ziehen zeichnet '
+          +'einen Balken',
+  's4.title':'4 · vor dem Rendern prüfen',
+  's4.why':'Erzeugte Schwärzungen sind Vorschläge. Nichts davon ist automatisch — durchgehen und '
+          +'bestätigen.',
+  's4.tab.hits':'jeder Fund',
+  's4.tab.gaps':n => `geratene Abschnitte (${n})`,
+  's4.tab.miss':n => `fast getroffen (${n})`,
+  's4.hits.hint':'Jede Stelle, an der der Text gefunden wurde. Durchgehen und bestätigen, dass der '
+                +'Balken darüber sitzt; falsche verwerfen.',
+  's4.prev':'◀ zurück', 's4.next':'weiter ▶', 's4.drop':'diesen verwerfen',
+  's4.undrop':'zurückholen',
+  's4.peek.hint':'Mit ausgeblendeten Balken direkt neben die Schwärzung springen, um zu sehen, ob '
+                +'der Text dort lesbar ist:',
+  's4.peek.before':'◀ Bild davor', 's4.peek.after':'Bild danach ▶',
+  's4.gaps.hint':'Hier hat die Texterkennung den Text verloren — Bewegungsunschärfe, Kompression, '
+                +'eine Hand davor. Der Balken wurde über die Lücke gehalten, in einer Größe, die '
+                +'beide Enden abdeckt, statt auszugehen. Jeden Abschnitt abspielen und prüfen, ob '
+                +'er verdeckt blieb.',
+  's4.miss.hint':'Text, der <b>fast</b> zur Auswahl passte und sichtbar geblieben ist — meist eine '
+                +'schlechte Lesung derselben Sache oder halb aus dem Bild ragender Text. Hier '
+                +'versteckt sich ein Leck. Eine Zeile je unterschiedlicher Lesung; jede prüfen und '
+                +'hinzufügen, wenn es dasselbe ist.',
+  'p.title':'Projekt', 'p.unsaved':'ungespeichert', 'p.export':'geschwärztes Video rendern…',
+  'p.save':'speichern', 'p.saveas':'speichern unter…', 'p.open':'öffnen…',
+  'p.reset':'zurücksetzen',
+  'p.verify':'Ausgabedatei prüfen',
+  'p.verify.title':'Liest die Ausgabedatei erneut und prüft, ob keiner der geschwärzten Texte noch '
+                  +'gefunden wird.',
+  'b.title':'Balken', 'b.clear':'leeren', 'b.clear.title':'alle Balken entfernen',
+  'b.empty':'noch keine — links Text auswählen oder im Video ziehen',
+  'e.title':'ausgewählter Balken', 'e.nosel':'nichts ausgewählt',
+  'col.black':'schwarz', 'col.white':'weiß', 'col.red':'rot',
+  'e.interp.title':'wie sich der Balken zwischen seinen Keyframes verhält',
+  'e.del':'löschen', 'e.del.title':'Entf-Taste', 'e.spans':'sichtbar von → bis',
+  'e.cut':'hier teilen', 'e.addspan':'+ Bereich', 'e.addkf':'Keyframe hier',
+  'e.kfs':'Keyframes',
+  'cancel':'abbrechen', 'goahead':'los',
+  'd.title':'Rendern fertig', 'd.folder':'im Ordner zeigen', 'd.open':'Datei abspielen',
+  'd.verify':'prüfen, ob der Text weg ist', 'd.close':'schließen',
+  'hand':'von Hand',
+  'ff.show':'ffmpeg-Ausgabe ▸', 'ff.hide':'ffmpeg-Ausgabe ▾', 'ff.nothing':'(noch nichts)',
+  'ff.none':'(ffmpeg hat nichts ausgegeben)',
+  'err.novideo':'zuerst ein Video öffnen', 'err.noboxes':'keine Balken vorhanden',
+  'err.noocr':'zuerst das Video lesen',
+  'err.nomatch':'keiner der ausgewählten Texte wurde gefunden',
+  'ocr.nolang':'keine OCR-Sprache installiert',
+  'ocr.nopack':'Kein Windows-OCR-Sprachpaket installiert. Einstellungen &gt; Zeit und Sprache &gt; '
+              +'Sprache.',
+  'ocr.frames':(d,t) => `${d} / ${t} Bilder`,
+  'ocr.stat':(r,d,g,l) => `<span class="good">${r} Lesungen · ${d} verschiedene · ${g} Gruppen`
+                        + `</span> · ${l}`,
+  'ocr.scaled':s => ` · <span class="warn">verkleinert ×${s}</span>`,
+  'ocr.reused':(n,l,r) => `${n} Lesungen aus dem Projekt übernommen (${l} @ ${r} fps)`,
+  'ocr.dropped':'gespeicherte Texterkennung verworfen: sie gehört zu einem anderen Video',
+  'rx.first':'<span class="hint">zuerst den Leseschritt ausführen</span>',
+  'rx.ok':(n,t) => `<span class="good">Regex trifft ${n} von ${t} Texten — die Liste unten ist `
+                 + `darauf gefiltert</span>`,
+  'rx.bad':'<span class="err">kein gültiger Regex</span>',
+  'gen.stat':(hits,boxes,qs,dropped) =>
+    `<span class="good">${hits} Lesungen → ${boxes} Balken</span> über ${qs} Text(e)`
+    + (dropped ? ` · ${dropped} verworfen` : ''),
+  'chk.n':(h,g,m) => `${h} Funde · ${g} geraten · ${m} fast`,
+  'chk.nothing':'noch nichts erzeugt',
+  'chk.hitn':(i,n) => `${i} / ${n}`,
+  'chk.hitinfo':(kind,t,text) => `<span class="tag ${kind}">${kind}</span> bei ${t}s — gelesen als `
+                               + `<b>${text}</b>`,
+  'chk.dropped':' <span class="tag dropped">verworfen</span>',
+  'gaps.none':'<span class="good">keine — der Text wurde auf jedem geprüften Bild erkannt</span>',
+  'gaps.row':s => `${s}s geraten`,
+  'miss.none':'<span class="good">nichts, was nah genug wäre</span>',
+  'miss.add':'gehört auch dazu',
+  'miss.times':(n,f,l) => n > 1 ? `${n}× · ${f}–${l}s` : `${f}s`,
+  'miss.title':(d,q) => `${d} Zeichen anders als „${q}“`,
+  'ask.delall':n => `Alle ${n} Balken entfernen?`,
+  'ask.reset':'Projekt zurücksetzen?\n\nBalken und Texterkennung werden verworfen. Das Video '
+             +'bleibt offen.',
+  'ask.export':(hits,qs,worries) =>
+    'Erzeugte Schwärzungen sind Vorschläge, keine Ergebnisse.\n\n'
+    + `${hits} Funde über ${qs} Text(e).\n\n`
+    + (worries.length ? 'Noch einen Blick wert:\n· ' + worries.join('\n· ')
+                      : 'Nichts fast getroffen, keine geratenen Abschnitte.')
+    + '\n\nRendern?',
+  'worry.miss':n => `${n} fast getroffen und sichtbar geblieben — die wahrscheinlichste Leckstelle`,
+  'worry.gaps':n => `${n} Abschnitt(e), in denen der Text verloren ging und der Balken geraten `
+                  + `wurde`,
+  'exp.start':'ffmpeg startet…', 'exp.stopping':'wird gestoppt…',
+  'exp.progress':(p,extra) => `rendert… ${p}%` + (extra ? ` · ${extra}` : ''),
+  'exp.wrote':(name,sha) => `<span class="good">${name} geschrieben</span> · Protokoll geschrieben `
+                          + `· sha256 ${sha}…`,
+  'exp.doneinfo':(n,sha,name) => `${n} Balken angewendet · sha256 ${sha}…<br><span class="hint">`
+    + `Daneben hält <b>${name}.redaction-log.json</b> den Hash der Quelle, den genauen `
+    + `ffmpeg-Befehl und jeden geschwärzten Text fest.</span>`,
+  'ver.running':'Ausgabedatei wird erneut gelesen…',
+  'ver.pass':(n,lines) => `<span class="good">GEPRÜFT — keiner der ${n} geschwärzten Texte ist in `
+                        + `der Ausgabe lesbar (${lines} Lesungen geprüft)</span>`,
+  'ver.fail':list => `<span class="err">NOCH LESBAR — ${list}</span>`,
+  'ver.item':(s,n,t) => `„${s}“ ×${n} ab ${t}s`,
+},
+};
+
+const store = k => { try { return localStorage.getItem(k); } catch (_) { return null; } };
+const keep = (k,v) => { try { localStorage.setItem(k,v); } catch (_) {} };
+
+let lang = 'en';
+function tx(k, ...a) {
+  const v = (L[lang] && L[lang][k]) ?? L.en[k] ?? k;
+  return typeof v === 'function' ? v(...a) : v;
+}
+function applyLang() {
+  lang = $('uilang').value === 'auto'
+    ? (navigator.language || 'en').toLowerCase().startsWith('de') ? 'de' : 'en'
+    : $('uilang').value;
+  for (const el of document.querySelectorAll('[data-i18n]')) el.textContent = tx(el.dataset.i18n);
+  for (const el of document.querySelectorAll('[data-i18n-title]')) el.title = tx(el.dataset.i18nTitle);
+  for (const el of document.querySelectorAll('[data-i18n-ph]')) el.placeholder = tx(el.dataset.i18nPh);
+  $('misshint').innerHTML = tx('s4.miss.hint');
+  $('loghow').textContent = tx($('fflog').hidden ? 'ff.show' : 'ff.hide');
+  if (!projectPath) $('fname').textContent = tx('p.unsaved');
+  render(); drawCheck();
+}
+$('uilang').onchange = () => { keep('lang', $('uilang').value); applyLang(); };
+
+/* ---------- theme ---------- */
+const sysDark = matchMedia('(prefers-color-scheme: dark)');
+function applyTheme() {
+  const p = $('theme').value;
+  document.documentElement.classList.toggle('light', p === 'light' || (p === 'auto' && !sysDark.matches));
+}
+$('theme').onchange = () => { keep('theme', $('theme').value); applyTheme(); };
+sysDark.addEventListener('change', applyTheme);
+
+/* ---------- simple vs advanced ----------
+   Simple is not a different tool, it is the same one with the settings that need a paragraph of
+   explanation left at their defaults. The OCR rate follows the video, which is what it should be
+   anyway; the bridge goes to 0.2 s because without the review panels there is no chance to look
+   at a long guessed stretch. */
+const simple = () => $('mode').value === 'simple';
+function applyMode() {
+  document.documentElement.classList.toggle('simple', simple());
+  if (simple()) { $('gapSec').value = 0.2; if (gen) rebuild(); }
+  fit();
+}
+$('mode').onchange = () => { keep('mode', $('mode').value); applyMode(); };
 
 const now = () => +vid.currentTime.toFixed(3);
 /* window.alert is swallowed and window.confirm returns true without asking in this webview,
@@ -1220,16 +1492,8 @@ function draw() {
   if (!peeking) for (const b of boxes) {
     if (!visible(b, t)) continue;
     const r = rectAt(b, t);
-    if (b.mode === 'black') {
-      ctx.fillStyle = b.color;
-      ctx.fillRect(r.x*s, r.y*s, r.w*s, r.h*s);
-    } else {
-      ctx.save();
-      ctx.beginPath(); ctx.rect(r.x*s, r.y*s, r.w*s, r.h*s); ctx.clip();
-      ctx.filter = `blur(${Math.max(1, b.strength*s)}px)`;
-      ctx.drawImage(vid, 0, 0, cv.width, cv.height);
-      ctx.restore(); ctx.filter = 'none';
-    }
+    ctx.fillStyle = b.color;
+    ctx.fillRect(r.x*s, r.y*s, r.w*s, r.h*s);
     if (b === sel) {
       ctx.strokeStyle = '#ffb454'; ctx.lineWidth = 2;
       ctx.strokeRect(r.x*s, r.y*s, r.w*s, r.h*s);
@@ -1269,7 +1533,7 @@ cv.addEventListener('pointerdown', e => {
              ox:p.x-hit.r.x, oy:p.y-hit.r.y, r:hit.r };
     return;
   }
-  const b = { id:nextId++, mode:$('genmode').value, color:'black', strength:12, interp:'linear',
+  const b = { id:nextId++, color:'black', interp:'linear',
               spans:[{ s:0, e:+vid.duration.toFixed(3) }],
               kfs:[{ t, x:p.x, y:p.y, w:1, h:1 }] };
   boxes.push(b); sel = b; render();
@@ -1305,8 +1569,8 @@ function render() {
   boxes.forEach((b,i) => {
     const d = document.createElement('div');
     d.className = 'box-item' + (b === sel ? ' sel' : '');
-    const label = b.gen ? b.gen.query : 'hand-drawn';
-    d.innerHTML = `<span class="tw"></span><span class="hint">${b.mode.slice(0,3)}</span>`;
+    const label = b.gen ? b.gen.query : tx('hand');
+    d.innerHTML = '<span class="tw"></span>';
     d.querySelector('.tw').textContent = `#${i+1} ${label}`;
     d.title = `${label} — ${b.kfs.length} keyframes, ${b.spans.length} range(s)`;
     d.onclick = () => { sel = b; render(); };
@@ -1315,15 +1579,10 @@ function render() {
 
   $('nosel').hidden = !!sel;
   $('selbody').hidden = !sel;
-  $('selname').textContent = sel ? (sel.gen ? sel.gen.query : 'hand-drawn') : '';
+  $('selname').textContent = sel ? (sel.gen ? sel.gen.query : tx('hand')) : '';
   if (sel) {
-    $('bc').value = sel.color; $('bmode').value = sel.mode; $('bstr').value = sel.strength;
+    $('bc').value = sel.color;
     $('binterp').value = sel.interp || 'linear';
-    $('bc').hidden = sel.mode !== 'black';
-    $('bstr').hidden = sel.mode === 'black';
-    $('bwarn').innerHTML = (sel.gen && sel.gen.varied && sel.mode !== 'black')
-      ? '<span class="warn">this box changes size a lot; blur and pixelate use one fixed size '
-        + '(the largest). Split it, or use a black bar.</span>' : '';
 
     const sp = $('spans');
     sp.innerHTML = '';
@@ -1367,7 +1626,8 @@ function render() {
 /* ---------- transport ---------- */
 function fit() {
   if (!vid.videoWidth) return;
-  const maxH = window.innerHeight * 0.42;
+  // simple mode drops the review panel below, so the freed height goes to the video
+  const maxH = window.innerHeight * (simple() ? 0.78 : 0.42);
   stage.style.width = Math.min(vid.videoWidth, stage.parentElement.clientWidth - 20,
                                maxH * vid.videoWidth / vid.videoHeight) + 'px';
 }
@@ -1390,8 +1650,6 @@ $('next').onclick = () => step(1);
 $('prev10').onclick = () => step(-10);
 $('next10').onclick = () => step(10);
 $('bc').onchange = e => { sel.color = e.target.value; render(); };
-$('bmode').onchange = e => { sel.mode = e.target.value; render(); };
-$('bstr').oninput = e => { sel.strength = +e.target.value || 12; render(); };
 $('binterp').onchange = e => { sel.interp = e.target.value; render(); };
 $('addspan').onclick = () => { sel.spans.push({ s: now(), e: +vid.duration.toFixed(3) }); render(); };
 $('cut').onclick = () => {
@@ -1409,22 +1667,14 @@ const deleteSel = () => { if (!sel) return; boxes = boxes.filter(b => b !== sel)
 $('del').onclick = deleteSel;
 $('delall').onclick = async () => {
   if (!boxes.length) return;
-  if (!await ask(`Remove all ${boxes.length} boxes?`)) return;
+  if (!await ask(tx('ask.delall', boxes.length))) return;
   boxes = []; sel = null; gen = null; render(); drawCheck();
 };
-$('allmode').onchange = e => {
-  const m = e.target.value;
-  if (!m) return;
-  for (const b of boxes) b.mode = m;
-  e.target.value = '';
-  render();
-};
 $('reset').onclick = async () => {
-  if (!await ask('Reset the project?\n\nBoxes and the OCR result are discarded. '
-      + 'The video stays open.')) return;
+  if (!await ask(tx('ask.reset'))) return;
   boxes = []; sel = null; gen = null; ocr = null; index = []; groups = [];
   checked.clear(); expanded.clear(); projectPath = null; lastExport = null;
-  $('fname').textContent = 'unsaved'; $('ocrstat').textContent = '';
+  setName(null); $('ocrstat').textContent = '';
   $('genstat').textContent = ''; $('expstat').textContent = '';
   $('rx').disabled = true; $('rx').value = '';
   render(); drawCheck();
@@ -1466,7 +1716,11 @@ $('pick').onclick = async () => {
   if (p) await loadVideo(p);
 };
 
-/* ---------- OCR ---------- */
+/* ---------- OCR ----------
+   Simple mode hides the rate, so it takes the video's own — anything slower leaves frames no one
+   looked at, and picking a number is exactly the decision simple mode exists to remove. */
+const ocrRate = () => simple() ? (+$('fps').value || 25) : (+$('rate').value || 2);
+
 async function fillLangs() {
   if (!IS_TAURI) return;
   try {
@@ -1474,9 +1728,8 @@ async function fillLangs() {
     const s = $('lang');
     s.innerHTML = '';
     if (!ls.length) {
-      s.innerHTML = '<option>no OCR language installed</option>';
-      $('ocrstat').innerHTML = '<span class="err">No Windows OCR language pack installed. '
-        + 'Settings &gt; Time &amp; language &gt; Language.</span>';
+      s.innerHTML = `<option>${tx('ocr.nolang')}</option>`;
+      $('ocrstat').innerHTML = `<span class="err">${tx('ocr.nopack')}</span>`;
       return;
     }
     for (const l of ls) s.add(new Option(l, l));
@@ -1490,12 +1743,11 @@ if (IS_TAURI) {
   listen('ocr://progress', e => {
     const { done, total } = e.payload;
     $('ocrprog').value = total ? done/total : 0;
-    $('ocrstat').textContent = `${done} / ${total} frames`;
+    $('ocrstat').textContent = tx('ocr.frames', done, total);
   });
   listen('export://progress', e => {
     $('expprog').value = e.payload;
-    $('expstat').textContent = `rendering… ${Math.round(e.payload*100)}%`
-      + (ffLast ? ` · ${ffLast}` : '');
+    $('expstat').textContent = tx('exp.progress', Math.round(e.payload*100), ffLast);
   });
   listen('export://log', e => {
     const line = String(e.payload);
@@ -1510,18 +1762,17 @@ if (IS_TAURI) {
 }
 
 $('runocr').onclick = async () => {
-  if (!videoPath) return say('open a video first', 'err');
+  if (!videoPath) return say(tx('err.novideo'), 'err');
   $('ocrprog').hidden = false; $('ocrprog').value = 0;
   $('runocr').disabled = true; $('cancelocr').hidden = false;
   try {
-    ocr = await invoke('ocr_video', { path: videoPath, rate: +$('rate').value || 2, lang: $('lang').value });
+    ocr = await invoke('ocr_video', { path: videoPath, rate: ocrRate(), lang: $('lang').value });
     index = buildIndex(ocr.lines);
     groups = groupStrings(index);
     checked.clear(); expanded.clear();
     $('rx').disabled = false;
-    $('ocrstat').innerHTML = `<span class="good">${ocr.lines.length} readings · ${index.length} distinct`
-      + ` · ${groups.length} groups</span> · ${ocr.lang}`
-      + (ocr.ocr_scale < 1 ? ` · <span class="warn">downscaled ×${ocr.ocr_scale.toFixed(2)}</span>` : '');
+    $('ocrstat').innerHTML = tx('ocr.stat', ocr.lines.length, index.length, groups.length, ocr.lang)
+      + (ocr.ocr_scale < 1 ? tx('ocr.scaled', ocr.ocr_scale.toFixed(2)) : '');
     gen = null; render(); drawCheck();
   } catch (e) { $('ocrstat').innerHTML = `<span class="err">${esc2(e)}</span>`; }
   $('runocr').disabled = false; $('cancelocr').hidden = true; $('ocrprog').hidden = true;
@@ -1555,10 +1806,8 @@ function drawStrings() {
   const total = index.length;
   const showing = out.reduce((n,g) => n + g.members.length, 0);
   $('nstr').textContent = total ? `${showing}/${total}` : '';
-  $('rxstat').innerHTML = !rx ? (index.length ? '' :
-      '<span class="hint">run the read step first</span>')
-    : re ? `<span class="good">regex matches ${showing} of ${total} strings — the list below is filtered to them</span>`
-         : '<span class="err">not a valid regex</span>';
+  $('rxstat').innerHTML = !rx ? (index.length ? '' : tx('rx.first'))
+    : re ? tx('rx.ok', showing, total) : tx('rx.bad');
 
   const done = generatedQueries();
   el.innerHTML = '';
@@ -1617,7 +1866,7 @@ function drawStrings() {
     }
   }
   const n = checked.size;
-  $('gen').textContent = n ? `hide ${n} selected` : 'hide selected';
+  $('gen').textContent = n ? tx('s3.gen.n', n) : tx('s3.gen');
   $('gen').disabled = !n;
 }
 $('selall').onclick = () => { for (const g of shownGroups().out) for (const m of g.members) checked.add(m.norm); drawStrings(); };
@@ -1625,7 +1874,7 @@ $('selnone').onclick = () => { checked.clear(); drawStrings(); };
 
 /* ---------- generate ---------- */
 $('gen').onclick = () => {
-  if (!ocr) return say('read the video first', 'err');
+  if (!ocr) return say(tx('err.noocr'), 'err');
   const queries = index.filter(g => checked.has(g.norm)).map(g => g.raw);
   if (!queries.length) return;
   const opt = { exact:true, substr:true, fuzzy:true, regex:'' };
@@ -1640,7 +1889,7 @@ $('gen').onclick = () => {
   for (const q of queries)
     for (const m of nearMisses(ocr.lines, q, hits))
       if (!seen.has(m.i) && !misses.some(x => x.i === m.i)) misses.push({ ...m, q });
-  if (!hits.length) return say('none of the selected text was matched', 'err');
+  if (!hits.length) return say(tx('err.nomatch'), 'err');
   gen = { queries, hits, dropped:new Set(), misses };
   rebuild();
   hitIdx = 0; gotoHit(0);
@@ -1658,18 +1907,16 @@ function rebuild() {
       rate: ocr.rate, duration: info.duration, W: info.width, H: info.height,
       gapBridgeSec: +$('gapSec').value, padPx: +$('padPx').value,
       videoFps: info.fps, interp: $('interp').value,
-      mode: $('genmode').value, strength: 12,
     })) { t.id = nextId++; t.gen.query = q; tracks.push(t); }
   }
   gen.tracks = tracks;
   boxes.push(...tracks);
   sel = tracks[0] || null;
-  $('genstat').innerHTML = `<span class="good">${live.length} readings → ${tracks.length} boxes`
-    + `</span> across ${gen.queries.length} string(s)`
-    + (gen.dropped.size ? ` · ${gen.dropped.size} dropped` : '');
+  $('genstat').innerHTML = tx('gen.stat', live.length, tracks.length, gen.queries.length,
+                              gen.dropped.size);
   render(); drawCheck();
 }
-$('gapSec').onchange = $('padPx').onchange = $('genmode').onchange = $('interp').onchange =
+$('gapSec').onchange = $('padPx').onchange = $('interp').onchange =
   () => { if (gen) rebuild(); };
 
 /* ---------- check ---------- */
@@ -1684,62 +1931,62 @@ function drawCheck() {
                     p.style.display = tab === t ? 'flex' : 'none'; };
   on('hits'); on('gaps'); on('miss');
   $('verify').disabled = !lastExport;
+  const miss = gen ? groupMisses(gen.misses) : [];
   if (!gen) {
     $('checkn').textContent = '';
-    $('hitn').textContent = 'nothing generated yet';
+    $('hitn').textContent = tx('chk.nothing');
     $('hitinfo').textContent = '';
-    $('gaplist').innerHTML = '<span class="hint">nothing generated yet</span>';
-    $('misslist').innerHTML = '<span class="hint">nothing generated yet</span>';
+    $('gaplist').innerHTML = `<span class="hint">${tx('chk.nothing')}</span>`;
+    $('misslist').innerHTML = `<span class="hint">${tx('chk.nothing')}</span>`;
     return;
   }
   let ngap = 0;
-  for (const t of gen.tracks) ngap += t.gen.gaps.length;
-  $('checkn').textContent = `${gen.hits.length} hits · ${ngap} guessed · ${gen.misses.length} almost`;
-  $('tab-gaps').textContent = `guessed stretches (${ngap})`;
-  $('tab-miss').textContent = `almost matched (${gen.misses.length})`;
+  for (const tr of gen.tracks) ngap += tr.gen.gaps.length;
+  $('checkn').textContent = tx('chk.n', gen.hits.length, ngap, miss.length);
+  $('tab-gaps').textContent = tx('s4.tab.gaps', ngap);
+  $('tab-miss').textContent = tx('s4.tab.miss', miss.length);
 
   const h = gen.hits[hitIdx];
-  $('hitn').textContent = `${hitIdx+1} / ${gen.hits.length}`;
+  $('hitn').textContent = tx('chk.hitn', hitIdx+1, gen.hits.length);
   $('hitinfo').innerHTML = h
-    ? `<span class="tag ${h.kind}">${h.kind}</span> at ${h.t.toFixed(2)}s — OCR read this line as `
-      + `<b>${esc2(h.text)}</b>`
-      + (h.line && (h.rect[2] < h.line[2] - 1 || h.rect[3] < h.line[3] - 1)
-         ? ` <span class="hint">(box covers only the matched words, `
-           + `${Math.round(h.rect[2])}×${Math.round(h.rect[3])} of `
-           + `${Math.round(h.line[2])}×${Math.round(h.line[3])})</span>` : '')
-      + (gen.dropped.has(hitIdx) ? ' <span class="tag dropped">dropped</span>' : '')
+    ? tx('chk.hitinfo', h.kind, h.t.toFixed(2), esc2(h.text))
+      + (gen.dropped.has(hitIdx) ? tx('chk.dropped') : '')
     : '';
-  $('hdrop').textContent = gen.dropped.has(hitIdx) ? 'put it back' : 'drop this one';
+  $('hdrop').textContent = tx(gen.dropped.has(hitIdx) ? 's4.undrop' : 's4.drop');
 
   const gl = $('gaplist'); gl.innerHTML = '';
-  gen.tracks.forEach((t, i) => t.gen.gaps.forEach(g => {
+  gen.tracks.forEach(trk => trk.gen.gaps.forEach(g => {
     const d = document.createElement('div');
     d.className = 'kf';
     d.innerHTML = `<b>${g.from.toFixed(2)} → ${g.to.toFixed(2)}s</b> `
-                + `<span class="${g.len > 4/ocr.rate ? 'warn' : 'hint'}">${g.len.toFixed(2)}s guessed</span>`;
+                + `<span class="${g.len > 4/ocr.rate ? 'warn' : 'hint'}">`
+                + `${tx('gaps.row', g.len.toFixed(2))}</span>`;
     const q = document.createElement('span');
-    q.className = 'hint'; q.style.marginLeft = 'auto'; q.textContent = t.gen.query;
-    d.querySelector('b').onclick = () => { sel = t; vid.currentTime = g.from; render(); };
+    q.className = 'hint'; q.style.marginLeft = 'auto'; q.textContent = trk.gen.query;
+    d.querySelector('b').onclick = () => { sel = trk; vid.currentTime = g.from; render(); };
     d.appendChild(q); gl.appendChild(d);
   }));
-  if (!gl.children.length) gl.innerHTML = '<span class="good">none — OCR saw the text on every '
-    + 'sampled frame it appears in</span>';
+  if (!gl.children.length) gl.innerHTML = tx('gaps.none');
 
   const ml = $('misslist'); ml.innerHTML = '';
-  if (!gen.misses.length) ml.innerHTML = '<span class="good">none close enough to worry about</span>';
-  for (const m of gen.misses.slice(0, 300)) {
+  if (!miss.length) ml.innerHTML = tx('miss.none');
+  for (const m of miss.slice(0, 300)) {
     const d = document.createElement('div');
     d.className = 'kf';
-    d.innerHTML = `<b>${m.t.toFixed(2)}s</b>`;
+    d.innerHTML = '<b></b>';
+    const b = d.querySelector('b');
+    b.textContent = tx('miss.times', m.count, m.first.toFixed(2), m.last.toFixed(2));
+    b.onclick = () => vid.currentTime = m.first;
     const s = document.createElement('span');
-    s.className = 'tw'; s.textContent = m.text; s.title = `${m.dist} character(s) different from "${m.q}"`;
+    s.className = 'tw'; s.textContent = m.text; s.title = tx('miss.title', m.dist, m.text);
     d.append(s);
-    d.querySelector('b').onclick = () => vid.currentTime = m.t;
     const add = document.createElement('button');
-    add.textContent = 'this is it too';
+    add.textContent = tx('miss.add');
+    // every frame this reading appeared on, not just the one shown
     add.onclick = () => {
-      gen.hits.push({ ...m, kind:'fuzzy' });
-      gen.misses = gen.misses.filter(x => x !== m);
+      const take = gen.misses.filter(x => normalize(x.text) === m.norm);
+      gen.hits.push(...take.map(x => ({ ...x, kind:'fuzzy' })));
+      gen.misses = gen.misses.filter(x => normalize(x.text) !== m.norm);
       gen.hits.sort((a,b) => a.t - b.t);
       rebuild();
     };
@@ -1776,32 +2023,24 @@ $('peeka').onclick = () => { const s = curSpan(); if (s) peekAt(s.e + 1/(+$('fps
 
 /* ---------- export ---------- */
 $('export').onclick = async () => {
-  if (!videoPath) return say('open a video first', 'err');
-  if (!boxes.length) return say('no boxes to apply', 'err');
-  if (gen) {
-    const gaps = gen.tracks.reduce((n,t) => n + t.gen.gaps.length, 0);
+  if (!videoPath) return say(tx('err.novideo'), 'err');
+  if (!boxes.length) return say(tx('err.noboxes'), 'err');
+  /* Simple mode has no review panels to send anyone to, so the gate would be a dialog listing
+     things the user cannot then go and look at. Advanced keeps it. */
+  if (gen && !simple()) {
+    const gaps = gen.tracks.reduce((n,trk) => n + trk.gen.gaps.length, 0);
+    const nmiss = groupMisses(gen.misses).length;
     const worries = [];
-    if (gen.misses.length) worries.push(`${gen.misses.length} almost-matched, left visible — `
-      + 'the most likely place for a leak');
-    if (gaps) worries.push(`${gaps} stretch(es) where OCR lost the text and the box was guessed`);
-    const msg = 'Generated redactions are proposals, not results.\n\n'
-      + `${gen.hits.length} hits across ${gen.queries.length} string(s).\n\n`
-      + (worries.length
-         ? 'Still worth a look:\n· ' + worries.join('\n· ')
-         : 'Nothing almost-matched and no guessed stretches.')
-      + '\n\nRender it?';
-    if (!await ask(msg)) return;
+    if (nmiss) worries.push(tx('worry.miss', nmiss));
+    if (gaps) worries.push(tx('worry.gaps', gaps));
+    if (!await ask(tx('ask.export', gen.hits.length, gen.queries.length, worries))) return;
   }
   const out = await invoke('pick_save',
     { name: (vid.dataset.name||'out').replace(/\.\w+$/,'') + '.redacted.mp4' });
   if (!out) return;
   ffLog = []; ffLast = ''; $('fflog').textContent = '';
   $('expprog').hidden = false; $('expprog').value = 0; $('export').disabled = true;
-  $('exprow').hidden = false; $('expstat').textContent = 'starting ffmpeg…';
-  $('expstat2').innerHTML = boxes.length > 12 && boxes.some(b => b.mode !== 'black')
-    ? `<span class="warn">${boxes.length} boxes with blur or pixelate — each one is a separate `
-      + `crop and overlay for every frame, so this is far slower than black bars. `
-      + `Watch the fps below; switch style to black bar if it is too slow.</span>` : '';
+  $('exprow').hidden = false; $('expstat').textContent = tx('exp.start');
   try {
     const rep = await invoke('export', {
       path: videoPath, filtergraph: graph(boxes), out,
@@ -1810,7 +2049,7 @@ $('export').onclick = async () => {
         rate: ocr ? ocr.rate : null, ocr_scale: ocr ? ocr.ocr_scale : null,
         redacted_strings: gen ? gen.queries : [],
         bridge_seconds: +$('gapSec').value, margin_px: +$('padPx').value,
-        boxes: boxes.map(b => ({ mode:b.mode, strength:b.strength, generated: !!b.gen,
+        boxes: boxes.map(b => ({ color:b.color, generated: !!b.gen,
                                  query: b.gen ? b.gen.query : null,
                                  spans:b.spans.length, keyframes:b.kfs.length,
                                  guessed_stretches: b.gen ? b.gen.gaps.length : 0 })),
@@ -1818,13 +2057,11 @@ $('export').onclick = async () => {
       },
     });
     lastExport = { path: out, strings: gen ? gen.queries : [] };
-    $('expstat').innerHTML = `<span class="good">wrote ${esc2(out.split(/[\\/]/).pop())}</span>`
-      + ` · log written · sha256 ${rep.output_sha256.slice(0,10)}…`;
+    const name = esc2(out.split(/[\\/]/).pop());
+    $('expstat').innerHTML = tx('exp.wrote', name, rep.output_sha256.slice(0,10));
     $('done-path').textContent = out;
-    $('done-info').innerHTML = `${boxes.length} box(es) applied · sha256 `
-      + `${rep.output_sha256.slice(0,16)}…<br><span class="hint">A `
-      + `<b>${esc2(out.split(/[\\/]/).pop())}.redaction-log.json</b> sidecar next to it records `
-      + `the input hash, the exact ffmpeg command and every redacted string.</span>`;
+    $('done-info').innerHTML = tx('exp.doneinfo', boxes.length,
+                                  rep.output_sha256.slice(0,16), name);
     $('done-stat').textContent = '';
     $('done-verify').disabled = !(gen && gen.queries.length);
     $('done').hidden = false;
@@ -1832,8 +2069,8 @@ $('export').onclick = async () => {
     $('expstat').innerHTML = `<span class="err">${esc2(e)}</span>`;
     // a failure is exactly when the output matters, so open it rather than hide it
     $('fflog').hidden = false;
-    $('loghow').textContent = 'ffmpeg output ▾';
-    $('fflog').textContent = ffLog.join('\n') || '(ffmpeg produced no output)';
+    $('loghow').textContent = tx('ff.hide');
+    $('fflog').textContent = ffLog.join('\n') || tx('ff.none');
     $('fflog').scrollTop = $('fflog').scrollHeight;
   }
   $('export').disabled = false; $('expprog').hidden = true; $('exprow').hidden = true; drawCheck();
@@ -1842,10 +2079,10 @@ $('export').onclick = async () => {
 async function runVerify(report) {
   if (!lastExport) return;
   $('verify').disabled = true; $('done-verify').disabled = true;
-  report('re-reading the exported file…', '');
+  report(tx('ver.running'), '');
   try {
     const re = await invoke('ocr_video', { path: lastExport.path,
-      rate: ocr ? ocr.rate : +$('rate').value, lang: $('lang').value });
+      rate: ocr ? ocr.rate : ocrRate(), lang: $('lang').value });
     const opt = { exact:true, substr:true, fuzzy:true, regex:'' };
     const fails = [];
     for (const s of lastExport.strings) {
@@ -1854,10 +2091,9 @@ async function runVerify(report) {
     }
     const pass = !fails.length;
     report(pass
-      ? `<span class="good">VERIFIED — none of the ${lastExport.strings.length} redacted `
-        + `string(s) can be read in the output (${re.lines.length} readings checked)</span>`
-      : `<span class="err">STILL READABLE — ${fails.map(f => `"${esc2(f.s)}" ×${f.n} from `
-        + `${f.first.toFixed(2)}s`).join(', ')}</span>`, 'html');
+      ? tx('ver.pass', lastExport.strings.length, re.lines.length)
+      : tx('ver.fail', fails.map(f => tx('ver.item', esc2(f.s), f.n, f.first.toFixed(2)))
+                            .join(', ')), 'html');
     await invoke('append_log', { path: lastExport.path + '.redaction-log.json',
       key: 'verify', value: { pass, checked: lastExport.strings, failures: fails,
                               lines_reocred: re.lines.length, rate: re.rate, lang: re.lang } });
@@ -1870,10 +2106,11 @@ const intoDone = (msg, html) => { if (html) $('done-stat').innerHTML = msg; else
 $('loghow').onclick = () => {
   const el = $('fflog');
   el.hidden = !el.hidden;
-  $('loghow').textContent = el.hidden ? 'ffmpeg output ▸' : 'ffmpeg output ▾';
-  if (!el.hidden) { el.textContent = ffLog.join('\n') || '(nothing yet)'; el.scrollTop = el.scrollHeight; }
+  $('loghow').textContent = tx(el.hidden ? 'ff.show' : 'ff.hide');
+  if (!el.hidden) { el.textContent = ffLog.join('\n') || tx('ff.nothing'); el.scrollTop = el.scrollHeight; }
 };
-$('expcancel').onclick = () => { invoke('export_cancel').catch(err); $('expstat').textContent = 'stopping…'; };
+$('expcancel').onclick = () => { invoke('export_cancel').catch(err);
+                                 $('expstat').textContent = tx('exp.stopping'); };
 $('verify').onclick = () => runVerify(intoStat);
 $('done-verify').onclick = () => runVerify(intoDone);
 $('done-close').onclick = () => { $('done').hidden = true; };
@@ -1889,7 +2126,7 @@ const project = () => ({
                engine: ocr.engine, width: ocr.width, height: ocr.height,
                duration: ocr.duration, ocr_scale: ocr.ocr_scale, generated: ocr.generated } : null,
   boxes: boxes.map(b => ({ ...b,
-    gen: b.gen ? { query:b.gen.query, gaps:b.gen.gaps, varied:b.gen.varied } : undefined })),
+    gen: b.gen ? { query:b.gen.query, gaps:b.gen.gaps } : undefined })),
 });
 
 function applyProject(p) {
@@ -1898,7 +2135,8 @@ function applyProject(p) {
   boxes = p.boxes || [];
   for (const b of boxes) {
     if (!b.spans) b.spans = [{ s:b.start ?? 0, e:b.end ?? 1e6 }];
-    b.mode ??= 'black'; b.strength ??= 12; b.color ??= 'black'; b.interp ??= 'linear';
+    b.color ??= 'black'; b.interp ??= 'linear';
+    delete b.mode; delete b.strength;   // projects from before filled boxes were the only style
   }
   ocr = null; index = []; groups = [];
   if (p.ocr && info && p.ocr.video_sha256 === info.sha256) {
@@ -1907,10 +2145,11 @@ function applyProject(p) {
   nextId = boxes.length + 1; sel = null; gen = null; checked.clear(); expanded.clear();
   render(); drawCheck();
   $('ocrstat').textContent = ocr
-    ? `${ocr.lines.length} readings reused from the project (${ocr.lang} @ ${ocr.rate} fps)`
-    : (p.ocr ? 'saved OCR discarded: it was made against a different video' : '');
+    ? tx('ocr.reused', ocr.lines.length, ocr.lang, ocr.rate)
+    : (p.ocr ? tx('ocr.dropped') : '');
 }
-function setName(n) { $('fname').textContent = n ? n.split(/[\\/]/).pop() : 'unsaved'; projectPath = n || null; }
+function setName(n) { $('fname').textContent = n ? n.split(/[\\/]/).pop() : tx('p.unsaved');
+                      projectPath = n || null; }
 
 async function saveTo(p) {
   await invoke('write_text', { path:p, text:JSON.stringify(project(), null, 1) });
@@ -1952,5 +2191,21 @@ async function drawRecent() {
   }
 }
 if (IS_TAURI) drawRecent();
+
+/* ---------- start ----------
+   Settings are restored before the first paint, so the window does not flash the wrong theme or
+   the advanced layout on the way to the simple one. */
+$('uilang').value = store('lang') || 'auto';
+$('theme').value = store('theme') || 'auto';
+$('mode').value = store('mode') || 'simple';
+applyTheme(); applyMode(); applyLang();
+
+/* The version belongs where an exhibit's provenance question gets asked: which build made this.
+   It is in every redaction-log.json already; the titlebar is where a human looks. */
+if (IS_TAURI) T.app.getVersion().then(v => {
+  $('ver').textContent = 'v' + v;
+  return T.window.getCurrentWindow().setTitle(`AutoBlur ${v} — OCR redaction`);
+}).catch(() => {});
+
 render(); drawCheck();
 </script>

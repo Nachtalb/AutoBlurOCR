@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { load } from './pure.mjs';
 
-const [file, query, mode = 'pixelate', gapBridgeSec = 0.5, padPx = 6] = process.argv.slice(2);
+const [file, query, gapBridgeSec = 0.5, padPx = 6] = process.argv.slice(2);
 if (!file || query === undefined) {
   console.error('usage: gen-boxes.mjs <ocr.json> <string> [mode] [gapBridgeSec] [padPx]');
   process.exit(2);
@@ -22,7 +22,7 @@ if (!hits.length) {
 const boxes = P.toTracks(hits, {
   rate: ocr.rate, videoFps: ocr.video_fps || ocr.rate, duration: ocr.duration,
   W: ocr.width, H: ocr.height,
-  gapBridgeSec: +gapBridgeSec, padPx: +padPx, mode, strength: 12,
+  gapBridgeSec: +gapBridgeSec, padPx: +padPx,
 });
 console.error(`${hits.length} hits -> ${boxes.length} tracks, `
   + `${boxes.reduce((n, b) => n + b.spans.length, 0)} spans`);

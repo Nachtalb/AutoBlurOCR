@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "AutoBlur main window. No network, no filesystem plugin: all I/O goes through commands.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:window:allow-set-title"]
 }

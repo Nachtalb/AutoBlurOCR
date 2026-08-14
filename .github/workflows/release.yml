@@ -27,6 +27,8 @@ jobs:
         with:
           workspaces: src-tauri
           cache-all-crates: true
+          # cargo-tauri has its own cache below; two caches writing ~/.cargo/bin fight over it
+          cache-bin: false
 
       - uses: actions/setup-node@v7
         with:
@@ -93,18 +95,34 @@ jobs:
       # The NSIS template is vendored and patched (src-tauri/windows/) so an upgrade installs in
       # place instead of offering to uninstall first. A different bundler version may have moved
       # on; fail loudly rather than shipping a stale installer.
+      #
+      # Two ways in, because the registry copy only exists on the runs that actually compiled
+      # tauri-cli. Insisting on it made a cache hit fail the job, which stopped the cache being
+      # saved, which meant every run compiled tauri-cli again: the cache could never take. A
+      # cache hit is the same binary a previous run already checked, so the hash is enough there;
+      # a cache miss is exactly when a bundler bump can arrive, and that path still reads what
+      # cargo resolved and fails if the pinned version is not what it picked.
       - name: vendored NSIS template still matches its upstream
         shell: pwsh
         run: |
           $pin = (Get-Content src-tauri/windows/UPSTREAM.txt -Raw)
-          if ($pin -notmatch 'tauri-bundler ([\d.]+).*sha256 (\w+)') { throw 'cannot parse UPSTREAM.txt' }
-          $ver, $sha = $Matches[1], $Matches[2]
+          if ($pin -notmatch 'tauri-bundler ([\d.]+) :: (\S+) :: sha256 (\w+)') { throw 'cannot parse UPSTREAM.txt' }
+          $ver, $rel, $sha = $Matches[1], $Matches[2], $Matches[3]
           $up = Get-ChildItem "$env:USERPROFILE/.cargo/registry/src" -Recurse -Filter installer.nsi -EA SilentlyContinue |
                 Where-Object FullName -like "*tauri-bundler-$ver*" | Select-Object -First 1
-          if (-not $up) { throw "tauri-bundler $ver not in the registry - the fork is pinned to it, so the bundler moved. Re-sync src-tauri/windows/installer.nsi." }
-          $now = (Get-FileHash $up.FullName -Algorithm SHA256).Hash
+          if ($up) {
+            $file, $how = $up.FullName, "the resolved dependency"
+          } elseif ('${{ steps.cli-cache.outputs.cache-hit }}' -ne 'true') {
+            throw "tauri-bundler $ver not in the registry after building tauri-cli - the fork is pinned to it, so the bundler moved. Re-sync src-tauri/windows/installer.nsi."
+          } else {
+            Invoke-WebRequest "https://static.crates.io/crates/tauri-bundler/tauri-bundler-$ver.crate" -OutFile bundler.crate -UseBasicParsing
+            tar -xzf bundler.crate
+            $file, $how = "tauri-bundler-$ver/$rel", "crates.io"
+            if (-not (Test-Path $file)) { throw "$rel is not in tauri-bundler $ver - the template moved. Re-sync the fork and update UPSTREAM.txt." }
+          }
+          $now = (Get-FileHash $file -Algorithm SHA256).Hash
           if ($now -ne $sha) { throw "upstream installer.nsi changed ($now != $sha). Re-sync the fork and update UPSTREAM.txt." }
-          "vendored template matches tauri-bundler $ver"
+          "vendored template matches tauri-bundler $ver (checked against $how)"
 
       - name: build installer
         run: cargo tauri build

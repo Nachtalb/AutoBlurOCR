@@ -19,6 +19,11 @@ Updating is just running the newer installer — it replaces the existing versio
 keeps your settings. Nothing is uninstalled, and there is no update check phoning home: this tool
 never touches the network.
 
+The interface is in English and German, follows your Windows light/dark setting, and starts in a
+**simple** mode that leaves the settings most jobs never touch at their defaults. Switch to
+**advanced** in the top right for the sampling rate, regex filtering, per-range visibility and the
+pre-export review panels.
+
 **One prerequisite:** a Windows OCR language pack. *Settings → Time & language → Language →*
 (your language) *→ Language options → Optional features → Optical character recognition.* AutoBlur
 lists the packs you actually have installed, so a missing one is obvious before you start.
@@ -32,22 +37,20 @@ lists the packs you actually have installed, so a missing one is obvious before 
    the same thing — `Hauptstrasse 14`, `Hauptstrasse 1A` — are grouped into one row, so a single
    tick catches all its misreadings. Tick as many as you like, or filter with a regular expression
    and watch the list narrow as you type.
-4. **Hide it.** Choose pixelate, blur or a black bar. Boxes are generated for every appearance and
-   follow the text as it moves.
-5. **Check it.** Three tabs, and this step matters:
+4. **Hide it.** Boxes are generated for every appearance and follow the text as it moves. They
+   are filled bars — black by default, white or red if that reads better against the footage.
+5. **Check it** (advanced mode). Three tabs, and this step matters:
    - **every hit** — step through each place the text was found and confirm the box sits over it.
      Jump to the frame either side of a redaction with the boxes switched off to see whether
      anything is readable there.
    - **guessed stretches** — where OCR lost the text for a moment and the box was held across the
      gap. Worth watching.
    - **almost matched** — text that *nearly* matched what you picked and was left visible. This is
-     where a leak hides. Read it.
+     where a leak hides. One row per distinct reading, however many frames it spans. Read it.
 6. **Render.** You get the redacted video, a log beside it, and buttons to open the folder, play
    the file, or re-read it and confirm the text is gone. **ffmpeg output** shows what the encoder
    is doing while it works, including its speed, and **stop** ends a render you don't want to wait
-   for. Blur and pixelate cost a separate crop and overlay per box on every frame, so a clip with
-   many boxes renders far slower than the same clip with black bars — the fps readout tells you
-   which you're in for.
+   for.
 
 Every generated box stays editable, and you can always drag a box on the video by hand.
 
@@ -66,8 +69,11 @@ The output is a re-encoded derivative, not a bit-exact copy, and the log says so
 - A saved project stores the video's hash. Opening it against a different file is refused —
   boxes are coordinates and timestamps, and applying them to the wrong video would be a silent,
   serious error.
-- Generated redactions are proposals. Nothing exports without you confirming you have checked them.
-- Pixelate is the default: blur over text is partially recoverable.
+- Generated redactions are proposals. In advanced mode nothing exports without you confirming you
+  have checked them.
+- Bars are filled, not blurred or pixelated. Both of those are partially recoverable, and both cost
+  a separate crop and overlay per box on every frame — on a clip with many boxes that is the
+  difference between a render that finishes and one that does not.
 
 ## Building it yourself
 
