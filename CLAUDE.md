@@ -1,0 +1,117 @@
+# Working on AutoBlur
+
+Implements `SPEC.md`. The original browser editor is preserved in `legacy/` — its box model,
+interpolation, span logic and filtergraph emitter were carried over, and only its browser-bound
+parts (file input, blob URLs, downloads, IndexedDB) were replaced.
+
+```
+src/index.html            frontend — one file, plain JS, no framework, no build step
+src-tauri/src/lib.rs      core: probe, frame sampling, export. No Tauri types in any signature.
+src-tauri/src/ocr.rs      Windows.Media.Ocr
+src-tauri/src/main.rs     Tauri commands — a thin wrapper over the core
+src-tauri/tests/          acceptance tests against ffmpeg-generated fixtures
+tools/pure.mjs            loads the frontend's DOM-free block into node
+tools/jstest.mjs          runs the frontend's self-test headlessly
+tools/gen-boxes.mjs       ocr.json + a string -> boxes.txt, using the app's own code
+```
+
+`src/index.html` is split by `PURE START` / `PURE END` markers. Everything between them is
+DOM-free and is executed headlessly by `tools/*.mjs`. Keep it that way: it is the only reason the
+matching, tracking and filtergraph code can be tested without a browser.
+
+## Build and test
+
+```powershell
+node tools\jstest.mjs                                              # frontend self-test
+cd src-tauri
+cargo run                                                          # run the app
+cargo test --no-default-features                                   # core, no webview stack
+cargo test --no-default-features -- --include-ignored              # + OCR and export round trips
+cargo tauri build                                                  # installer
+```
+
+`--no-default-features` drops the `app` feature so the core builds without the webview stack.
+Sidecars resolve from `AUTOBLUR_FFMPEG` / `AUTOBLUR_FFPROBE`, then next to the executable, then
+`src-tauri/binaries/<name>-<triple>.exe` — never from `PATH`, because a forensic workstation's
+`PATH` is not ours to assume and version drift changes filter behaviour.
+
+Fixtures are generated at test time with ffmpeg `drawtext` at known positions and times, so ground
+truth is exact. Coverage is split by where the code lives: coordinate and timestamp fidelity,
+two-appearances-in-one-frame and the export round trip are in `tests/acceptance.rs`; span padding,
+gap bridging, spatial clustering, keyframe stepping, chunking and the hash guard are in the
+frontend's `selfTest()`, because that is where the occurrence→track conversion runs.
+
+The round trip is the one that matters. It exports a redacted fixture and re-OCRs the output. If
+it regresses, the tool leaks text.
+
+## Versioning
+
+`Cargo.toml` and `tauri.conf.json` must agree, and the release workflow refuses to publish if the
+tag disagrees with either. That version is written into every `redaction-log.json`, so two builds
+sharing a version number makes an exhibit untraceable. Bump it for anything you ship.
+
+## Constraints found by running it, not by reading about it
+
+Each of these is commented at its call site. They cost real debugging time and are easy to
+"simplify" back into a bug.
+
+**ffmpeg's expression evaluator has a budget of about 100 operations.** A flat sum spends it as
+fast as nesting does — measured on ffmpeg 8, 98 summed terms parse and 99 fail with
+`Failed to configure input pad`. No expression shape escapes it, so a track with more keyframes
+than fit is emitted as several boxes, each active over its own slice of time and sharing boundary
+keyframes so there is no seam.
+
+**Generated boxes step between readings; they do not interpolate.** OCR measured a rect on a
+specific frame, and sampling at the video's own rate means every frame has one. Sliding between
+them replaces a measurement with a guess. Hand-drawn boxes keep sliding, because there the
+keyframes are waypoints a human set.
+
+**Track association is per-axis and predicted from measured speed.** A single radius of
+`max(w, h)` uses a text line's *width* as its *vertical* tolerance, so a 150 px wide name adopts
+another copy of itself 150 px above — in a scrolling list, a different message. That merge paints
+one box spanning everything between them.
+
+**Gap bridging is measured in seconds, not samples.** Counting samples ties the bridged window to
+the sampling rate: three samples is 1.5 s at 2 fps but 0.1 s at 30 fps. Sampling faster would then
+split spans that used to hold and switch the box off mid-dropout — exactly backwards.
+
+**A straight line across a dropout is not coverage.** Between two readings either side of a gap the
+box would travel a path the text never took. It holds a rect covering both ends instead, or walks
+across in steps when one rect would balloon. Over-covering costs pixels; under-covering is a
+disclosure.
+
+**`CoIncrementMTAUsage` pins the MTA for the process lifetime.** Without it, the last thread that
+called `RoInitialize` exiting tears WinRT down and frees the activation factories that windows-rs
+caches in process statics. Those caches are never invalidated, so the next `Buffer::Create` on any
+thread dereferences a freed vtable. It only shows up under concurrency, far from the cause.
+
+**One `OcrEngine` per worker.** A second `RecognizeAsync` on a busy engine fails outright with
+"Another RecognizeAsync operation is already running!", so engines cannot be shared across the
+pool even though the type is agile.
+
+**The graph goes to ffmpeg from a file, never inline** — it contains escaped commas that Windows
+argument quoting mangles. Which flag depends on the build: `-/filter:v` on ffmpeg 7+, and
+`-filter_script:v` on older ones, removed in ffmpeg 8. The first export tries the new spelling,
+falls back, and remembers.
+
+**ffmpeg echoes the whole filtergraph when it rejects one**, as a single line thousands of
+characters long, which shoves the real diagnostic out of any tail you keep. `readable_error` clips
+long lines so the message survives.
+
+**`window.alert` is swallowed and `window.confirm` returns true without asking** in this webview.
+Messages and the pre-export confirmation are in-page. A native dialog there would have been a
+review gate that silently always said yes.
+
+## Things deliberately not built
+
+- No OCR engine abstraction. One engine, one code path, until a real video defeats it — then add
+  RapidOCR/PaddleOCR ONNX behind a setting.
+- No second source of truth in Rust. All state lives in the frontend's box model; the backend is
+  stateless apart from the cancel flag and the OCR cache.
+
+## Known limits
+
+- Text clipped by the frame edge stops matching once part of it is cut off. It surfaces in
+  **almost matched** rather than being redacted silently.
+- Text moving faster than roughly its own width between readings splits into separate boxes.
+  Sampling at the video's frame rate — the default — makes this rare.
