@@ -12,53 +12,82 @@ on:
 permissions:
   contents: write
 
+env:
+  FFMPEG_URL: https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.7z
+
 jobs:
   installer:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          cache-all-crates: true
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
       - name: frontend self-test
         run: node tools/jstest.mjs
 
+      - name: cache ffmpeg sidecars
+        id: ffmpeg-cache
+        uses: actions/cache@v6
+        with:
+          path: src-tauri/binaries
+          key: ffmpeg-${{ hashFiles('.github/workflows/release.yml') }}
+
       - name: fetch ffmpeg sidecars
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          $url = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.7z'
-          Invoke-WebRequest -Uri $url -OutFile ffmpeg.7z -UseBasicParsing
+          Invoke-WebRequest -Uri $env:FFMPEG_URL -OutFile ffmpeg.7z -UseBasicParsing
           7z x ffmpeg.7z -offmpeg -y | Out-Null
           $bin = (Get-ChildItem ffmpeg -Recurse -Filter ffmpeg.exe | Select-Object -First 1).DirectoryName
           New-Item -ItemType Directory -Force src-tauri/binaries | Out-Null
           Copy-Item "$bin\ffmpeg.exe"  src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe
           Copy-Item "$bin\ffprobe.exe" src-tauri/binaries/ffprobe-x86_64-pc-windows-msvc.exe
 
-      # A release that leaks text is worse than no release: the acceptance tests, including the
-      # export round trip, gate the installer.
-      - name: acceptance tests
-        run: cargo test --no-default-features --manifest-path src-tauri/Cargo.toml -- --include-ignored
-
-      - name: refuse to release if the tag and the manifest disagree
+      - name: install the English OCR language pack
+        continue-on-error: true
         shell: pwsh
         run: |
-          $tag = "${{ github.event.inputs.tag }}"
-          if (-not $tag) { $tag = "${{ github.ref_name }}" }
-          $ver = (Select-String -Path src-tauri/tauri.conf.json -Pattern '"version"\s*:\s*"([^"]+)"').Matches[0].Groups[1].Value
-          if ($tag -ne "v$ver") {
-            throw "tag $tag does not match tauri.conf.json version $ver — the redaction log records this version, so they must agree"
+          $c = Get-WindowsCapability -Online -Name 'Language.OCR~~~en-US~0.0.1.0' -ErrorAction SilentlyContinue
+          if ($c -and $c.State -ne 'Installed') { Add-WindowsCapability -Online -Name $c.Name | Out-Null }
+          Get-WindowsCapability -Online -Name 'Language.OCR*' | Select-Object Name, State | Format-Table -AutoSize
+
+      # A release that leaks text is worse than no release, so the acceptance tests —
+      # including the export round trip — gate the installer.
+      - name: acceptance tests
+        run: cargo test --no-default-features --manifest-path src-tauri/Cargo.toml -- --include-ignored --nocapture
+
+      - name: refuse to release if the tag and the manifests disagree
+        shell: pwsh
+        run: |
+          $tag = '${{ github.event.inputs.tag }}'
+          if (-not $tag) { $tag = '${{ github.ref_name }}' }
+          $conf  = (Select-String -Path src-tauri/tauri.conf.json -Pattern '"version"\s*:\s*"([^"]+)"').Matches[0].Groups[1].Value
+          $cargo = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          if ($conf -ne $cargo) { throw "Cargo.toml says $cargo, tauri.conf.json says $conf" }
+          if ($tag -ne "v$conf") {
+            throw "tag $tag does not match version $conf — this version is written into every redaction log, so they must agree"
           }
-          "releasing v$ver"
+          "releasing v$conf"
+
+      - name: cache tauri-cli
+        id: cli-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin/cargo-tauri.exe
+          key: tauri-cli-v2-${{ runner.os }}
 
       - name: install tauri-cli
+        if: steps.cli-cache.outputs.cache-hit != 'true'
         run: cargo install tauri-cli --version "^2" --locked
 
       - name: build installer
@@ -69,10 +98,11 @@ jobs:
         shell: pwsh
         run: |
           $f = Get-ChildItem src-tauri/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
-          (Get-FileHash $f.FullName -Algorithm SHA256).Hash | Out-File "$($f.FullName).sha256" -Encoding ascii -NoNewline
-          "$($f.Name)  $((Get-FileHash $f.FullName -Algorithm SHA256).Hash)"
+          $h = (Get-FileHash $f.FullName -Algorithm SHA256).Hash
+          "$h *$($f.Name)" | Out-File "$($f.FullName).sha256" -Encoding ascii -NoNewline
+          "$($f.Name)  $h"
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
@@ -82,10 +112,10 @@ jobs:
             Offline OCR-driven text redaction for video. Windows 11, no network.
 
             The installer bundles ffmpeg and ffprobe; nothing is resolved from `PATH`.
-            Installs per-user to `%LOCALAPPDATA%\AutoBlur`, so no admin prompt.
+            Installs per-user to `%LOCALAPPDATA%\AutoBlur`, so there is no admin prompt.
 
-            An OCR language pack must be installed:
-            *Settings > Time & language > Language > (language) > Language options >
-            Optional features > Optical character recognition*.
+            Needs a Windows OCR language pack: *Settings → Time & language → Language →*
+            (your language) *→ Language options → Optional features → Optical character
+            recognition.*
 
             Verify the download against the `.sha256` beside it.

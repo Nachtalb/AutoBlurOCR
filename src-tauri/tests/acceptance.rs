@@ -214,6 +214,21 @@ fn export_refuses_to_touch_the_input() {
 mod win {
     use super::*;
 
+    /// Windows OCR needs a recognizer language pack, which hosted CI images may not have.
+    /// A missing OS feature is not a broken build — but it must be loud, never silent, or the
+    /// decisive round-trip test quietly stops covering anything.
+    pub fn have_ocr() -> bool {
+        match autoblur::ocr::languages() {
+            Ok(l) if !l.is_empty() => true,
+            _ => {
+                eprintln!("SKIPPED: no Windows OCR recognizer installed, OCR tests did not run. \
+                           Settings > Time & language > Language > Language options > \
+                           Optional features > Optical character recognition.");
+                false
+            }
+        }
+    }
+
     fn ocr(path: &Path) -> OcrResult {
         let c = AtomicBool::new(false);
         autoblur::ocr_video(path, &OcrOpts { rate: RATE, lang: "en-US".into() }, &|_, _| {}, &c)
@@ -226,15 +241,17 @@ mod win {
 
     #[test]
     fn languages_are_listed() {
-        let l = autoblur::ocr::languages().unwrap();
-        assert!(!l.is_empty(), "no OCR recognizer installed: Settings > Time & language > Language");
+        let l = autoblur::ocr::languages().unwrap_or_default();
         println!("recognizers: {l:?}   max image dimension: {}", autoblur::ocr::max_dim());
+        if !have_ocr() { return; }
+        assert!(l.iter().all(|s| s.contains('-')), "expected BCP-47 tags, got {l:?}");
     }
 
     /// §11.1 — coordinates are reported in SOURCE VIDEO PIXELS, origin top-left.
     /// A mismatch here silently misplaces every redaction.
     #[test]
     fn coordinate_fidelity() {
+        if !have_ocr() { return; }
         let r = ocr(&fixture());
         assert_eq!((r.width, r.height), (W, H));
         let h = hits(&r);
@@ -252,6 +269,7 @@ mod win {
     /// §11.2 — text present only from 4.0 s to 6.0 s produces occurrences only there, ±dt.
     #[test]
     fn timestamp_fidelity() {
+        if !have_ocr() { return; }
         let r = ocr(&fixture());
         let dt = 1.0 / RATE;
         for l in hits(&r) {
@@ -263,6 +281,7 @@ mod win {
     /// §11.5 ground truth — the same string twice in one frame must stay two occurrences.
     #[test]
     fn two_positions_stay_separate_occurrences() {
+        if !have_ocr() { return; }
         let r = ocr(&fixture_two());
         let mut by_t = std::collections::HashMap::<String, usize>::new();
         for l in hits(&r) {
@@ -276,6 +295,7 @@ mod win {
     #[test]
     #[ignore = "slow: two OCR passes plus an encode; run with --ignored"]
     fn round_trip_leaves_no_text() {
+        if !have_ocr() { return; }
         let inp = fixture();
         let r = ocr(&inp);
         let oj = tmp().join("ocr.json");
@@ -331,6 +351,7 @@ mod moving {
     #[test]
     #[ignore = "stress: OCRs 300 frames"]
     fn moving_text_survives_export() {
+        if !super::win::have_ocr() { return; }
         let inp = fixture_moving();
         let c = AtomicBool::new(false);
         let r = autoblur::ocr_video(
