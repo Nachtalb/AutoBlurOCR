@@ -9,6 +9,9 @@
 use autoblur::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::AtomicBool as AB;
+
+static NO_CANCEL: AB = AB::new(false);
 #[cfg(windows)]
 use std::sync::atomic::AtomicBool;
 
@@ -187,7 +190,7 @@ fn export_applies_the_graph_and_logs_hashes() {
     // drawbox over the text, enabled exactly over the padded span
     let graph = "drawbox=x=410:y=290:w=520:h=80:color=red@1:t=fill:enable=between(t\\,3.5\\,6.5)";
     let seen = std::cell::RefCell::new(Vec::<f64>::new());
-    let rep = export(&inp, graph, &out, &|f| seen.borrow_mut().push(f)).unwrap();
+    let rep = export(&inp, graph, &out, &|f| seen.borrow_mut().push(f), &|_| {}, &NO_CANCEL).unwrap();
     let seen = seen.into_inner();
 
     assert!(out.is_file());
@@ -212,9 +215,9 @@ fn export_applies_the_graph_and_logs_hashes() {
 #[test]
 fn export_refuses_to_touch_the_input() {
     let inp = fixture();
-    let e = export(&inp, "drawbox=x=0:y=0:w=8:h=8:color=red@1:t=fill", &inp, &|_| {});
+    let e = export(&inp, "drawbox=x=0:y=0:w=8:h=8:color=red@1:t=fill", &inp, &|_| {}, &|_| {}, &NO_CANCEL);
     assert!(e.is_err(), "must refuse to overwrite the input");
-    assert!(export(&inp, "  ", &tmp().join("x.mp4"), &|_| {}).is_err(), "must refuse an empty graph");
+    assert!(export(&inp, "  ", &tmp().join("x.mp4"), &|_| {}, &|_| {}, &NO_CANCEL).is_err(), "must refuse an empty graph");
 }
 
 /* ------------------------------------------------------- OCR (Windows) */
@@ -322,7 +325,7 @@ mod win {
         assert!(!graph.trim().is_empty());
 
         let out = tmp().join("roundtrip.mp4");
-        export(&inp, &graph, &out, &|_| {}).unwrap();
+        export(&inp, &graph, &out, &|_| {}, &|_| {}, &NO_CANCEL).unwrap();
 
         let after = ocr(&out);
         let left = hits(&after);
@@ -378,7 +381,7 @@ mod moving {
         println!("graph is {} bytes", graph.len());
 
         let out = tmp().join("moving-out.mp4");
-        let rep = export(&inp, &graph, &out, &|_| {});
+        let rep = export(&inp, &graph, &out, &|_| {}, &|_| {}, &NO_CANCEL);
         match &rep {
             Err(e) => panic!("EXPORT FAILED with a {}-byte graph:\n{e}", graph.len()),
             Ok(_) => {}

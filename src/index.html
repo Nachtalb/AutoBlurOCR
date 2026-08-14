@@ -46,6 +46,8 @@
   button:hover:not(:disabled) { border-color:var(--acc); }
   button:disabled, input:disabled, select:disabled { opacity:.4; cursor:default; }
   button.pri { border-color:var(--acc); color:var(--acc); }
+  button.solid { background:var(--acc); border-color:var(--acc); color:#14161a; font-weight:600; }
+  button.solid:hover:not(:disabled) { background:#ffc46e; border-color:#ffc46e; }
   button.danger:hover { border-color:var(--bad); color:var(--bad); }
   button.tab { border-color:transparent; color:var(--dim); padding:2px 8px; }
   button.tab.on { border-color:var(--acc); color:var(--acc); }
@@ -110,6 +112,10 @@
   #done .card { background:var(--panel); border:1px solid var(--acc); border-radius:8px;
                 padding:16px; width:min(620px,86vw); box-shadow:0 8px 40px #000a; }
   #done .card p { margin:0 0 10px; line-height:1.5; }
+  /* ffmpeg's own words, live. Without them a slow render and a wedged one look identical. */
+  #fflog { margin:4px 0 0; max-height:150px; overflow:auto; background:#0f1115; color:#9ecbff;
+           border:1px solid var(--line); border-radius:4px; padding:6px;
+           font:10.5px/1.35 ui-monospace,monospace; white-space:pre-wrap; word-break:break-all; }
 </style>
 
 <header>
@@ -196,10 +202,14 @@
         <span class="hint" id="clock">0.00 s</span>
       </div>
       <div class="row">
-        <button id="prev">◀ frame</button><button id="next">frame ▶</button>
+        <button id="prev10" title="back 10 frames — Shift+←">◀◀</button>
+        <button id="prev" title="back one frame — ←">◀ frame</button>
+        <button id="next" title="forward one frame — →">frame ▶</button>
+        <button id="next10" title="forward 10 frames — Shift+→">▶▶</button>
         <span class="hint">video fps</span>
         <input type="number" id="fps" value="25" step="1" min="1" style="width:52px">
-        <span class="hint" style="margin-left:auto">drag on the video to draw a box by hand</span>
+        <span class="hint" style="margin-left:auto">← → step · Shift ×10 · Home/End · Space plays
+          · drag on the video to draw a box</span>
       </div>
     </div>
 
@@ -254,7 +264,7 @@
     <div class="panel">
       <h2>project <span class="hint" id="fname" style="margin-left:auto">unsaved</span></h2>
       <div class="row">
-        <button id="export" class="pri" style="flex:1">render redacted video…</button>
+        <button id="export" class="solid" style="flex:1">render redacted video…</button>
       </div>
       <div class="row">
         <button id="save">save</button>
@@ -263,7 +273,15 @@
         <button id="reset" class="danger" style="margin-left:auto">reset</button>
       </div>
       <progress id="expprog" value="0" max="1" hidden style="margin-top:6px"></progress>
-      <div class="hint" id="expstat" style="margin-top:4px"></div>
+      <div class="row" id="exprow" hidden style="margin-top:4px">
+        <span class="hint" id="expstat" style="flex:1;min-width:0"></span>
+        <button id="expcancel" class="danger">stop</button>
+      </div>
+      <div class="hint" id="expstat2" style="margin-top:4px"></div>
+      <div class="row" style="margin-top:4px">
+        <button id="loghow" class="tab" style="padding:0">ffmpeg output ▸</button>
+      </div>
+      <pre id="fflog" hidden></pre>
       <div class="row" style="margin-top:6px">
         <button id="verify" disabled style="flex:1"
           title="Re-reads the exported file and checks none of the redacted text can still be found.">verify the exported file</button>
@@ -1151,6 +1169,7 @@ let checked = new Set();       // normalised strings ticked for redaction
 let expanded = new Set();      // expanded group keys
 let gen = null;                // {hits, dropped, misses, tracks, queries}
 let hitIdx = 0, peekUntil = 0, projectPath = null, lastExport = null;
+let ffLog = [], ffLast = '';
 let tab = 'hits';
 
 const now = () => +vid.currentTime.toFixed(3);
@@ -1192,7 +1211,10 @@ function draw() {
   const s = scale();
   if (cv.width !== cv.clientWidth) { cv.width = cv.clientWidth; cv.height = cv.clientHeight; }
   ctx.clearRect(0,0,cv.width,cv.height);
-  const t = vid.currentTime;
+  /* Spans are clamped to ffprobe's duration, but the element's own duration can be a frame
+     longer, so sitting on the last frame put the playhead past every span and the preview drew
+     nothing. Judge visibility at the last instant a span could cover. */
+  const t = info ? Math.min(vid.currentTime, info.duration) : vid.currentTime;
   const peeking = performance.now() < peekUntil;
   $('peek').hidden = !peeking;
   if (!peeking) for (const b of boxes) {
@@ -1354,9 +1376,19 @@ play.onclick = () => vid.paused ? vid.play() : vid.pause();
 vid.onplay = () => play.textContent = '❚❚';
 vid.onpause = () => play.textContent = '▶';
 seek.oninput = () => vid.currentTime = +seek.value;
-const step = d => vid.currentTime = clamp(vid.currentTime + d/(+$('fps').value||25), 0, vid.duration);
+/* The last frame starts one frame before `duration`; seeking to `duration` itself lands on the
+   ended state, where the element shows a still and play() will not resume from there. */
+const frameDur = () => 1 / (+$('fps').value || 25);
+const lastFrame = () => Math.max(0, (info ? info.duration : vid.duration || 0) - frameDur());
+function seekTo(t) {
+  if (!vid.paused) vid.pause();
+  vid.currentTime = clamp(t, 0, lastFrame());
+}
+const step = d => seekTo(vid.currentTime + d * frameDur());
 $('prev').onclick = () => step(-1);
 $('next').onclick = () => step(1);
+$('prev10').onclick = () => step(-10);
+$('next10').onclick = () => step(10);
 $('bc').onchange = e => { sel.color = e.target.value; render(); };
 $('bmode').onchange = e => { sel.mode = e.target.value; render(); };
 $('bstr').oninput = e => { sel.strength = +e.target.value || 12; render(); };
@@ -1400,6 +1432,12 @@ $('reset').onclick = async () => {
 addEventListener('keydown', e => {
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
   if (e.code === 'Space' && !typing) { e.preventDefault(); play.onclick(); }
+  if (!typing && vid.videoWidth) {
+    if (e.key === 'ArrowLeft')  { e.preventDefault(); step(e.shiftKey ? -10 : -1); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); step(e.shiftKey ?  10 :  1); }
+    if (e.key === 'Home')       { e.preventDefault(); seekTo(0); }
+    if (e.key === 'End')        { e.preventDefault(); seekTo(lastFrame()); }
+  }
   if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && sel) { e.preventDefault(); deleteSel(); }
   if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('save').onclick(); }
 });
@@ -1456,7 +1494,18 @@ if (IS_TAURI) {
   });
   listen('export://progress', e => {
     $('expprog').value = e.payload;
-    $('expstat').textContent = `rendering… ${Math.round(e.payload*100)}%`;
+    $('expstat').textContent = `rendering… ${Math.round(e.payload*100)}%`
+      + (ffLast ? ` · ${ffLast}` : '');
+  });
+  listen('export://log', e => {
+    const line = String(e.payload);
+    ffLog.push(line);
+    if (ffLog.length > 400) ffLog.shift();
+    // ffmpeg's status line carries speed and fps; that is what says slow vs stuck
+    const m = line.match(/fps=\s*([\d.]+).*?speed=\s*([\d.]+x)/);
+    if (m) ffLast = `${m[1]} fps, ${m[2]}`;
+    const el = $('fflog');
+    if (!el.hidden) { el.textContent = ffLog.join('\n'); el.scrollTop = el.scrollHeight; }
   });
 }
 
@@ -1721,8 +1770,7 @@ function curSpan() {
     for (const s of b.spans) if (t >= s.s - 1e-6 && t <= s.e + 1e-6) return s;
   return null;
 }
-const peekAt = t => { vid.currentTime = clamp(t, 0, info ? info.duration : vid.duration);
-                      peekUntil = performance.now() + 2500; };
+const peekAt = t => { seekTo(t); peekUntil = performance.now() + 2500; };
 $('peekb').onclick = () => { const s = curSpan(); if (s) peekAt(s.s - 1/(+$('fps').value||25)); };
 $('peeka').onclick = () => { const s = curSpan(); if (s) peekAt(s.e + 1/(+$('fps').value||25)); };
 
@@ -1730,14 +1778,30 @@ $('peeka').onclick = () => { const s = curSpan(); if (s) peekAt(s.e + 1/(+$('fps
 $('export').onclick = async () => {
   if (!videoPath) return say('open a video first', 'err');
   if (!boxes.length) return say('no boxes to apply', 'err');
-  if (gen && !await ask('Generated redactions are proposals, not results.\n\n'
-      + `${gen.hits.length} hits · ${gen.misses.length} almost-matched · `
-      + `${gen.tracks.reduce((n,t)=>n+t.gen.gaps.length,0)} guessed stretches\n\n`
-      + 'Have you stepped through them? The almost-matched list is where a leak hides.')) return;
+  if (gen) {
+    const gaps = gen.tracks.reduce((n,t) => n + t.gen.gaps.length, 0);
+    const worries = [];
+    if (gen.misses.length) worries.push(`${gen.misses.length} almost-matched, left visible — `
+      + 'the most likely place for a leak');
+    if (gaps) worries.push(`${gaps} stretch(es) where OCR lost the text and the box was guessed`);
+    const msg = 'Generated redactions are proposals, not results.\n\n'
+      + `${gen.hits.length} hits across ${gen.queries.length} string(s).\n\n`
+      + (worries.length
+         ? 'Still worth a look:\n· ' + worries.join('\n· ')
+         : 'Nothing almost-matched and no guessed stretches.')
+      + '\n\nRender it?';
+    if (!await ask(msg)) return;
+  }
   const out = await invoke('pick_save',
     { name: (vid.dataset.name||'out').replace(/\.\w+$/,'') + '.redacted.mp4' });
   if (!out) return;
+  ffLog = []; ffLast = ''; $('fflog').textContent = '';
   $('expprog').hidden = false; $('expprog').value = 0; $('export').disabled = true;
+  $('exprow').hidden = false; $('expstat').textContent = 'starting ffmpeg…';
+  $('expstat2').innerHTML = boxes.length > 12 && boxes.some(b => b.mode !== 'black')
+    ? `<span class="warn">${boxes.length} boxes with blur or pixelate — each one is a separate `
+      + `crop and overlay for every frame, so this is far slower than black bars. `
+      + `Watch the fps below; switch style to black bar if it is too slow.</span>` : '';
   try {
     const rep = await invoke('export', {
       path: videoPath, filtergraph: graph(boxes), out,
@@ -1764,8 +1828,15 @@ $('export').onclick = async () => {
     $('done-stat').textContent = '';
     $('done-verify').disabled = !(gen && gen.queries.length);
     $('done').hidden = false;
-  } catch (e) { $('expstat').innerHTML = `<span class="err">${esc2(e)}</span>`; }
-  $('export').disabled = false; $('expprog').hidden = true; drawCheck();
+  } catch (e) {
+    $('expstat').innerHTML = `<span class="err">${esc2(e)}</span>`;
+    // a failure is exactly when the output matters, so open it rather than hide it
+    $('fflog').hidden = false;
+    $('loghow').textContent = 'ffmpeg output ▾';
+    $('fflog').textContent = ffLog.join('\n') || '(ffmpeg produced no output)';
+    $('fflog').scrollTop = $('fflog').scrollHeight;
+  }
+  $('export').disabled = false; $('expprog').hidden = true; $('exprow').hidden = true; drawCheck();
 };
 
 async function runVerify(report) {
@@ -1796,6 +1867,13 @@ async function runVerify(report) {
 const intoStat = (msg, html) => { if (html) $('expstat').innerHTML = msg; else $('expstat').textContent = msg; };
 const intoDone = (msg, html) => { if (html) $('done-stat').innerHTML = msg; else $('done-stat').textContent = msg;
                                   intoStat(msg, html); };
+$('loghow').onclick = () => {
+  const el = $('fflog');
+  el.hidden = !el.hidden;
+  $('loghow').textContent = el.hidden ? 'ffmpeg output ▸' : 'ffmpeg output ▾';
+  if (!el.hidden) { el.textContent = ffLog.join('\n') || '(nothing yet)'; el.scrollTop = el.scrollHeight; }
+};
+$('expcancel').onclick = () => { invoke('export_cancel').catch(err); $('expstat').textContent = 'stopping…'; };
 $('verify').onclick = () => runVerify(intoStat);
 $('done-verify').onclick = () => runVerify(intoDone);
 $('done-close').onclick = () => { $('done').hidden = true; };

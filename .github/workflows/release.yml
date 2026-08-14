@@ -90,6 +90,22 @@ jobs:
         if: steps.cli-cache.outputs.cache-hit != 'true'
         run: cargo install tauri-cli --version "^2" --locked
 
+      # The NSIS template is vendored and patched (src-tauri/windows/) so an upgrade installs in
+      # place instead of offering to uninstall first. A different bundler version may have moved
+      # on; fail loudly rather than shipping a stale installer.
+      - name: vendored NSIS template still matches its upstream
+        shell: pwsh
+        run: |
+          $pin = (Get-Content src-tauri/windows/UPSTREAM.txt -Raw)
+          if ($pin -notmatch 'tauri-bundler ([\d.]+).*sha256 (\w+)') { throw 'cannot parse UPSTREAM.txt' }
+          $ver, $sha = $Matches[1], $Matches[2]
+          $up = Get-ChildItem "$env:USERPROFILE/.cargo/registry/src" -Recurse -Filter installer.nsi -EA SilentlyContinue |
+                Where-Object FullName -like "*tauri-bundler-$ver*" | Select-Object -First 1
+          if (-not $up) { throw "tauri-bundler $ver not in the registry - the fork is pinned to it, so the bundler moved. Re-sync src-tauri/windows/installer.nsi." }
+          $now = (Get-FileHash $up.FullName -Algorithm SHA256).Hash
+          if ($now -ne $sha) { throw "upstream installer.nsi changed ($now != $sha). Re-sync the fork and update UPSTREAM.txt." }
+          "vendored template matches tauri-bundler $ver"
+
       - name: build installer
         run: cargo tauri build
         working-directory: src-tauri

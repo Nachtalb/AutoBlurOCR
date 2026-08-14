@@ -15,6 +15,10 @@ for the current user, so there is no admin prompt, and ffmpeg is bundled — not
 
 Verify the download against the `.sha256` published beside it.
 
+Updating is just running the newer installer — it replaces the existing version in place and
+keeps your settings. Nothing is uninstalled, and there is no update check phoning home: this tool
+never touches the network.
+
 **One prerequisite:** a Windows OCR language pack. *Settings → Time & language → Language →*
 (your language) *→ Language options → Optional features → Optical character recognition.* AutoBlur
 lists the packs you actually have installed, so a missing one is obvious before you start.
@@ -39,7 +43,11 @@ lists the packs you actually have installed, so a missing one is obvious before 
    - **almost matched** — text that *nearly* matched what you picked and was left visible. This is
      where a leak hides. Read it.
 6. **Render.** You get the redacted video, a log beside it, and buttons to open the folder, play
-   the file, or re-read it and confirm the text is gone.
+   the file, or re-read it and confirm the text is gone. **ffmpeg output** shows what the encoder
+   is doing while it works, including its speed, and **stop** ends a render you don't want to wait
+   for. Blur and pixelate cost a separate crop and overlay per box on every frame, so a clip with
+   many boxes renders far slower than the same clip with black bars — the fps readout tells you
+   which you're in for.
 
 Every generated box stays editable, and you can always drag a box on the video by hand.
 

@@ -1,0 +1,1 @@
+tauri-bundler 2.9.4 :: src/bundle/windows/nsis/installer.nsi :: sha256 20F4ECC730DEFB71F1342EAEAEC4021DF13BE3D843ABBA0EFFE88EA5835FA079

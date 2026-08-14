@@ -102,6 +102,23 @@ long lines so the message survives.
 Messages and the pre-export confirmation are in-page. A native dialog there would have been a
 review gate that silently always said yes.
 
+## The vendored NSIS installer template
+
+`src-tauri/windows/installer.nsi` is Tauri's own template with one block added, marked
+`AutoBlur patch`. Upstream shows a page whenever a previous install is detected and preselects
+"uninstall before installing", so the ordinary way to update is uninstall-then-reinstall. An
+upgrade writes new files over old ones and needs no removal, so the patch skips that page when
+the incoming version is newer. Same-version runs keep their Add/Reinstall vs Uninstall choice,
+and downgrades keep the page and the `ALLOWDOWNGRADES` guard.
+
+This is a fork, so it can rot. `UPSTREAM.txt` pins the bundler version and the hash of the file
+it came from, and the release workflow fails if the installed `tauri-bundler` is a different
+version or its template changed. To re-sync: copy the upstream file over ours, re-apply the
+marked block, update `UPSTREAM.txt`.
+
+The alternative — `tauri-plugin-updater` — was rejected deliberately. It would have the app call
+GitHub on launch, and "no network access, ever" is the guarantee this tool makes.
+
 ## Things deliberately not built
 
 - No OCR engine abstraction. One engine, one code path, until a real video defeats it — then add

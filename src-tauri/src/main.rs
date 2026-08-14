@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
 static CANCEL: AtomicBool = AtomicBool::new(false);
+static CANCEL_EXPORT: AtomicBool = AtomicBool::new(false);
 
 type R<T> = std::result::Result<T, Error>;
 
@@ -71,6 +72,11 @@ fn ocr_cancel() {
 }
 
 #[tauri::command]
+fn export_cancel() {
+    CANCEL_EXPORT.store(true, Ordering::SeqCst);
+}
+
+#[tauri::command]
 async fn ocr_video(app: AppHandle, path: String, rate: f64, lang: String) -> R<OcrResult> {
     CANCEL.store(false, Ordering::SeqCst);
     tauri::async_runtime::spawn_blocking(move || {
@@ -92,12 +98,20 @@ async fn export(
     out: String,
     meta: Value,
 ) -> R<ExportReport> {
+    CANCEL_EXPORT.store(false, Ordering::SeqCst);
     tauri::async_runtime::spawn_blocking(move || {
         let a = app.clone();
+        let b = app.clone();
         let progress = move |f: f64| {
             let _ = a.emit("export://progress", f);
         };
-        let report = autoblur::export(Path::new(&path), &filtergraph, Path::new(&out), &progress)?;
+        // Every ffmpeg line reaches the UI as it arrives. A render that is merely slow and one
+        // that is wedged look identical from a percentage; ffmpeg's own output says which.
+        let log = move |line: &str| {
+            let _ = b.emit("export://log", line);
+        };
+        let report = autoblur::export(
+            Path::new(&path), &filtergraph, Path::new(&out), &progress, &log, &CANCEL_EXPORT)?;
 
         // §10: the artefact that answers "what exactly did you do to this video"
         let mut log = serde_json::to_value(&report)?;
@@ -178,7 +192,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             pick_video, pick_open, pick_save, probe, ocr_languages, ocr_cancel, ocr_video,
-            export, append_log, reveal, write_text, read_text, recents, push_recent, drop_recent
+            export, export_cancel, append_log, reveal, write_text, read_text, recents, push_recent, drop_recent
         ])
         .run(tauri::generate_context!())
         .expect("error while running AutoBlur");

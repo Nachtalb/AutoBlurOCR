@@ -67,8 +67,16 @@ pub fn tool(name: &str) -> PathBuf {
 }
 
 fn spawn(path: &Path, args: &[&str]) -> Result<Child> {
+    spawn_with(path, args, Stdio::piped())
+}
+
+/// `stdout` is piped for ffprobe (JSON) and for the raw frame stream, but an encode writes to a
+/// file and produces nothing there. Leaving it piped and never reading it is a deadlock waiting
+/// for the day ffmpeg does print something: the pipe fills and the process blocks forever,
+/// looking exactly like a render stuck at a few percent.
+fn spawn_with(path: &Path, args: &[&str], out: Stdio) -> Result<Child> {
     let mut c = Command::new(path);
-    c.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    c.args(args).stdin(Stdio::null()).stdout(out).stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -333,13 +341,18 @@ const FILTER_FILE_FLAGS: [&str; 2] = ["-/filter:v", "-filter_script:v"];
 static FILTER_FLAG: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Runs ffmpeg, pumping `time=` out of its stderr. `Ok((success, stderr_tail))`.
+///
+/// Every stderr line is handed to `log` as it arrives: an encode that is merely slow and one
+/// that is wedged look identical from a percentage alone, and ffmpeg says which it is.
 fn run_encode(
     ffmpeg: &Path,
     args: &[&str],
     duration: f64,
     progress: &dyn Fn(f64),
+    log: &dyn Fn(&str),
+    cancel: &AtomicBool,
 ) -> Result<(bool, String)> {
-    let mut child = spawn(ffmpeg, args)?;
+    let mut child = spawn_with(ffmpeg, args, Stdio::null())?;
     // ffmpeg writes progress to stderr as `time=HH:MM:SS.ss`, separated by \r not \n
     let mut tail = String::new();
     if let Some(stderr) = child.stderr.take() {
@@ -350,13 +363,22 @@ fn run_encode(
             if rd.read_until(b'\r', &mut chunk)? == 0 {
                 break;
             }
+            if cancel.load(Ordering::Relaxed) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Ok((false, "cancelled".into()));
+            }
             let s = String::from_utf8_lossy(&chunk);
             for line in s.split(['\r', '\n']) {
+                if line.trim().is_empty() {
+                    continue;
+                }
                 if let Some(t) = parse_time(line) {
                     if duration > 0.0 {
                         progress((t / duration).clamp(0.0, 1.0));
                     }
                 }
+                log(line.trim());
             }
             tail.push_str(&s);
             if tail.len() > 8000 {
@@ -374,6 +396,8 @@ pub fn export(
     filtergraph: &str,
     out: &Path,
     progress: &dyn Fn(f64),
+    log: &dyn Fn(&str),
+    cancel: &AtomicBool,
 ) -> Result<ExportReport> {
     let info = probe(path)?;
     if filtergraph.trim().is_empty() {
@@ -405,10 +429,15 @@ pub fn export(
             "-hide_banner", "-nostdin", "-y", "-i", &pi, FILTER_FILE_FLAGS[flag], &ps,
             "-c:v", "libx264", "-crf", "18", "-preset", "veryfast", "-c:a", "copy", &po,
         ];
-        let (ok, tail) = run_encode(&ffmpeg, &args, info.duration, progress)?;
+        let (ok, tail) = run_encode(&ffmpeg, &args, info.duration, progress, log, cancel)?;
         if ok {
             FILTER_FLAG.store(flag, Ordering::Relaxed);
             break args;
+        }
+        if cancel.load(Ordering::Relaxed) {
+            let _ = std::fs::remove_file(&script);
+            let _ = std::fs::remove_file(out);
+            bail!("cancelled");
         }
         if flag + 1 < FILTER_FILE_FLAGS.len() && tail.contains("Unrecognized option") {
             flag += 1;
